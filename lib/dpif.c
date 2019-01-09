@@ -1244,6 +1244,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
         execute.probe = false;
         execute.mtu = 0;
         aux->error = dpif_execute(aux->dpif, &execute);
+
         log_execute_message(aux->dpif, &this_module, &execute,
                             true, aux->error);
 
@@ -1407,6 +1408,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
 
                 case DPIF_OP_EXECUTE:
                     COVERAGE_INC(dpif_execute);
+
                     log_execute_message(dpif, &this_module, &op->execute,
                                         false, error);
                     break;
@@ -1833,6 +1835,13 @@ log_execute_message(const struct dpif *dpif,
         char *packet;
         uint64_t stub[1024 / 8];
         struct ofpbuf md = OFPBUF_STUB_INITIALIZER(stub);
+
+        /* We will need the whole data for logging */
+        struct dp_packet *p = CONST_CAST(struct dp_packet *,
+                                         execute->packet);
+        if (!dp_packet_is_linear(p)) {
+            dp_packet_linearize(p);
+        }
 
         packet = ofp_packet_to_string(dp_packet_data(execute->packet),
                                       dp_packet_size(execute->packet),

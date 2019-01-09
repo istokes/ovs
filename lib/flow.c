@@ -694,7 +694,7 @@ ipv6_sanity_check(const struct ovs_16aligned_ip6_hdr *nh, size_t size)
 
 /* Caller is responsible for initializing 'dst' with enough storage for
  * FLOW_U64S * 8 bytes. */
-void
+int
 miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 {
     const struct pkt_metadata *md = &packet->md;
@@ -816,6 +816,13 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         int ip_len;
         uint16_t tot_len;
 
+        /* Check if header is in first mbuf, otherwise return error */
+        if (!dp_packet_is_linear(packet)) {
+            if (!dp_packet_may_pull(packet, packet->l3_ofs, sizeof *nh)) {
+                return -1;
+            }
+        }
+
         if (OVS_UNLIKELY(!ipv4_sanity_check(nh, size, &ip_len, &tot_len))) {
             goto out;
         }
@@ -845,6 +852,12 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         const struct ovs_16aligned_ip6_hdr *nh = data;
         ovs_be32 tc_flow;
         uint16_t plen;
+
+        if (!dp_packet_is_linear(packet)) {
+            if (!dp_packet_may_pull(packet, packet->l3_ofs, sizeof *nh)) {
+                return -1;
+            }
+        }
 
         if (OVS_UNLIKELY(!ipv6_sanity_check(nh, size))) {
             goto out;
@@ -889,6 +902,14 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         if (dl_type == htons(ETH_TYPE_ARP) ||
             dl_type == htons(ETH_TYPE_RARP)) {
             struct eth_addr arp_buf[2];
+
+            if (!dp_packet_is_linear(packet)) {
+                if (!dp_packet_may_pull(packet, packet->l3_ofs,
+                                        ARP_ETH_HEADER_LEN)) {
+                    return -1;
+                }
+            }
+
             const struct arp_eth_header *arp = (const struct arp_eth_header *)
                 data_try_pull(&data, &size, ARP_ETH_HEADER_LEN);
 
@@ -936,6 +957,13 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             if (OVS_LIKELY(size >= TCP_HEADER_LEN)) {
                 const struct tcp_header *tcp = data;
 
+                if (!dp_packet_is_linear(packet)) {
+                    if (!dp_packet_may_pull(packet, packet->l4_ofs,
+                                            TCP_HEADER_LEN)) {
+                        return -1;
+                    }
+                }
+
                 miniflow_push_be32(mf, arp_tha.ea[2], 0);
                 miniflow_push_be32(mf, tcp_flags,
                                    TCP_FLAGS_BE32(tcp->tcp_ctl));
@@ -948,6 +976,13 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             if (OVS_LIKELY(size >= UDP_HEADER_LEN)) {
                 const struct udp_header *udp = data;
 
+                if (!dp_packet_is_linear(packet)) {
+                    if (!dp_packet_may_pull(packet, packet->l4_ofs,
+                                            UDP_HEADER_LEN)) {
+                        return -1;
+                    }
+                }
+
                 miniflow_push_be16(mf, tp_src, udp->udp_src);
                 miniflow_push_be16(mf, tp_dst, udp->udp_dst);
                 miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
@@ -956,6 +991,13 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         } else if (OVS_LIKELY(nw_proto == IPPROTO_SCTP)) {
             if (OVS_LIKELY(size >= SCTP_HEADER_LEN)) {
                 const struct sctp_header *sctp = data;
+
+                if (!dp_packet_is_linear(packet)) {
+                    if (!dp_packet_may_pull(packet, packet->l4_ofs,
+                                            SCTP_HEADER_LEN)) {
+                        return -1;
+                    }
+                }
 
                 miniflow_push_be16(mf, tp_src, sctp->sctp_src);
                 miniflow_push_be16(mf, tp_dst, sctp->sctp_dst);
@@ -966,6 +1008,13 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             if (OVS_LIKELY(size >= ICMP_HEADER_LEN)) {
                 const struct icmp_header *icmp = data;
 
+                if (!dp_packet_is_linear(packet)) {
+                    if (!dp_packet_may_pull(packet, packet->l4_ofs,
+                                            ICMP_HEADER_LEN)) {
+                        return -1;
+                    }
+                }
+
                 miniflow_push_be16(mf, tp_src, htons(icmp->icmp_type));
                 miniflow_push_be16(mf, tp_dst, htons(icmp->icmp_code));
                 miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
@@ -974,6 +1023,13 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         } else if (OVS_LIKELY(nw_proto == IPPROTO_IGMP)) {
             if (OVS_LIKELY(size >= IGMP_HEADER_LEN)) {
                 const struct igmp_header *igmp = data;
+
+                if (!dp_packet_is_linear(packet)) {
+                    if (!dp_packet_may_pull(packet, packet->l4_ofs,
+                                            IGMP_HEADER_LEN)) {
+                        return -1;
+                    }
+                }
 
                 miniflow_push_be16(mf, tp_src, htons(igmp->igmp_type));
                 miniflow_push_be16(mf, tp_dst, htons(igmp->igmp_code));
@@ -987,8 +1043,18 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             if (OVS_LIKELY(size >= sizeof(struct icmp6_hdr))) {
                 const struct in6_addr *nd_target;
                 struct eth_addr arp_buf[2];
-                const struct icmp6_hdr *icmp = data_pull(&data, &size,
-                                                         sizeof *icmp);
+                const struct icmp6_hdr *icmp;
+
+                if (!dp_packet_is_linear(packet)) {
+                    if (!dp_packet_may_pull(packet, packet->l4_ofs,
+                                            sizeof *icmp)) {
+                        return -1;
+                    }
+                }
+
+                icmp = data_pull(&data, &size, sizeof *icmp);
+
+
                 if (parse_icmpv6(&data, &size, icmp, &nd_target, arp_buf)) {
                     if (nd_target) {
                         miniflow_push_words(mf, nd_target, nd_target,
@@ -1011,6 +1077,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     }
  out:
     dst->map = mf.map;
+    return 0;
 }
 
 ovs_be16
@@ -3007,7 +3074,8 @@ static void
 flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
                      uint32_t pseudo_hdr_csum)
 {
-    size_t l4_len = (char *) dp_packet_tail(p) - (char *) dp_packet_l4(p);
+    //size_t l4_len = (char *) dp_packet_tail(p) - (char *) dp_packet_l4(p);
+    size_t l4_len = dp_packet_l4_size(p);
 
     if (!(flow->nw_frag & FLOW_NW_FRAG_ANY)
         || !(flow->nw_frag & FLOW_NW_FRAG_LATER)) {
@@ -3015,30 +3083,31 @@ flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
             struct tcp_header *tcp = dp_packet_l4(p);
 
             tcp->tcp_csum = 0;
-            tcp->tcp_csum = csum_finish(csum_continue(pseudo_hdr_csum,
-                                                      tcp, l4_len));
+            tcp->tcp_csum = csum_finish(
+                packet_csum_continue(p, pseudo_hdr_csum, p->l4_ofs, l4_len));
         } else if (flow->nw_proto == IPPROTO_UDP) {
             struct udp_header *udp = dp_packet_l4(p);
 
             udp->udp_csum = 0;
-            udp->udp_csum = csum_finish(csum_continue(pseudo_hdr_csum,
-                                                      udp, l4_len));
+            udp->udp_csum = csum_finish(
+                packet_csum_continue(p, pseudo_hdr_csum, p->l4_ofs, l4_len));
         } else if (flow->nw_proto == IPPROTO_ICMP) {
             struct icmp_header *icmp = dp_packet_l4(p);
 
             icmp->icmp_csum = 0;
-            icmp->icmp_csum = csum(icmp, l4_len);
+            icmp->icmp_csum = packet_csum(p, p->l4_ofs, l4_len);
         } else if (flow->nw_proto == IPPROTO_IGMP) {
             struct igmp_header *igmp = dp_packet_l4(p);
 
             igmp->igmp_csum = 0;
-            igmp->igmp_csum = csum(igmp, l4_len);
+            igmp->igmp_csum = packet_csum(p, p->l4_ofs, l4_len);
         } else if (flow->nw_proto == IPPROTO_ICMPV6) {
             struct icmp6_hdr *icmp = dp_packet_l4(p);
 
             icmp->icmp6_cksum = 0;
             icmp->icmp6_cksum = (OVS_FORCE uint16_t)
-                csum_finish(csum_continue(pseudo_hdr_csum, icmp, l4_len));
+                csum_finish(packet_csum_continue(p, pseudo_hdr_csum, p->l4_ofs,
+                            l4_len));
         }
     }
 }
@@ -3064,12 +3133,12 @@ packet_expand(struct dp_packet *p, const struct flow *flow, size_t size)
         eth->eth_type = htons(dp_packet_size(p));
     } else if (dl_type_is_ip_any(flow->dl_type)) {
         uint32_t pseudo_hdr_csum;
-        size_t l4_len = (char *) dp_packet_tail(p) - (char *) dp_packet_l4(p);
+        size_t l4_len = dp_packet_l4_size(p);
 
         if (flow->dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *ip = dp_packet_l3(p);
 
-            ip->ip_tot_len = htons(p->l4_ofs - p->l3_ofs + l4_len);
+            ip->ip_tot_len = htons(dp_packet_l3_size(p));
             ip->ip_csum = 0;
             ip->ip_csum = csum(ip, sizeof *ip);
 
@@ -3153,7 +3222,7 @@ flow_compose(struct dp_packet *p, const struct flow *flow,
         l4_len = flow_compose_l4(p, flow, l7, l7_len);
 
         ip = dp_packet_l3(p);
-        ip->ip_tot_len = htons(p->l4_ofs - p->l3_ofs + l4_len);
+        ip->ip_tot_len = htons(dp_packet_l3_size(p));
         /* Checksum has already been zeroed by put_zeros call. */
         ip->ip_csum = csum(ip, sizeof *ip);
 

@@ -455,6 +455,7 @@ mcast_snooping_add_report(struct mcast_snooping *ms,
     if (!igmpv3) {
         return 0;
     }
+    offset = (char *) igmpv3 - (char *) dp_packet_data(p);
     ngrp = ntohs(igmpv3->ngrp);
     offset += IGMPV3_HEADER_LEN;
     while (ngrp--) {
@@ -507,6 +508,7 @@ mcast_snooping_add_mld(struct mcast_snooping *ms,
     if (!mld) {
         return 0;
     }
+    offset = (char *) mld - (char *) dp_packet_data(p);
     ngrp = ntohs(mld->ngrp);
     offset += MLD_HEADER_LEN;
     addr = dp_packet_at(p, offset, sizeof(struct in6_addr));

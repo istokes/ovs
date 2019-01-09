@@ -636,12 +636,22 @@ reverse_pat_packet(struct dp_packet *pkt, const struct conn *conn)
 static void
 reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
 {
-    char *tail = dp_packet_tail(pkt);
-    char pad = dp_packet_l2_pad_size(pkt);
+    char *tail;
+    char pad;
     struct conn_key inner_key;
     const char *inner_l4 = NULL;
-    uint16_t orig_l3_ofs = pkt->l3_ofs;
-    uint16_t orig_l4_ofs = pkt->l4_ofs;
+    uint16_t orig_l3_ofs;
+    uint16_t orig_l4_ofs;
+
+    /* We need the whole packet to parse the packet below */
+    if (!dp_packet_is_linear(pkt)) {
+        dp_packet_linearize(pkt);
+    }
+
+    tail = dp_packet_tail(pkt);
+    pad = dp_packet_l2_pad_size(pkt);
+    orig_l3_ofs = pkt->l3_ofs;
+    orig_l4_ofs = pkt->l4_ofs;
 
     if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
         struct ip_header *nh = dp_packet_l3(pkt);
@@ -1323,6 +1333,7 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
             write_ct_md(packet, zone, NULL, NULL, NULL);
             continue;
         }
+
         process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
                     setlabel, nat_action_info, tp_src, tp_dst, helper);
     }
@@ -1904,9 +1915,18 @@ static bool
 conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
                  struct conn_lookup_ctx *ctx, uint16_t zone)
 {
-    const struct eth_header *l2 = dp_packet_eth(pkt);
-    const struct ip_header *l3 = dp_packet_l3(pkt);
-    const char *l4 = dp_packet_l4(pkt);
+    const struct eth_header *l2;
+    const struct ip_header *l3;
+    const char *l4;
+
+    /* We need the whole packet to parse the packet below */
+    if (!dp_packet_is_linear(pkt)) {
+        dp_packet_linearize(pkt);
+    }
+
+    l2 = dp_packet_eth(pkt);
+    l3 = dp_packet_l3(pkt);
+    l4 = dp_packet_l4(pkt);
 
     memset(ctx, 0, sizeof *ctx);
 
@@ -3174,7 +3194,7 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
                const struct conn *conn_for_expectation,
                long long now, enum ftp_ctl_pkt ftp_ctl, bool nat)
 {
-    struct ip_header *l3_hdr = dp_packet_l3(pkt);
+    struct ip_header *l3_hdr;
     ovs_be32 v4_addr_rep = 0;
     struct ct_addr v6_addr_rep;
     size_t addr_offset_from_ftp_data_start = 0;
@@ -3182,6 +3202,13 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     char *ftp_data_start;
     bool do_seq_skew_adj = true;
     enum ct_alg_mode mode = CT_FTP_MODE_ACTIVE;
+
+    /* We need the whole packet to parse the packet below */
+    if (!dp_packet_is_linear(pkt)) {
+        dp_packet_linearize(pkt);
+    }
+
+    l3_hdr = dp_packet_l3(pkt);
 
     if (detect_ftp_ctl_type(ctx, pkt) != ftp_ctl) {
         return;

@@ -1849,6 +1849,11 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
                 }
                 n_ops = i;
             } else {
+                /* We will need to pass the whole to encode the message */
+                if (!dp_packet_is_linear(op->execute.packet)) {
+                    dp_packet_linearize(op->execute.packet);
+                }
+
                 dpif_netlink_encode_execute(dpif->dp_ifindex, &op->execute,
                                             &aux->request);
             }

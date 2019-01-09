@@ -20,6 +20,8 @@
 
 #include "openvswitch/types.h"
 
+uint32_t crc32c_continue(uint32_t partial, const uint8_t *data, size_t size);
+ovs_be32 crc32c_finish(uint32_t partial);
 ovs_be32 crc32c(const uint8_t *data, size_t);
 
 #endif /* crc32c.h */

@@ -5710,6 +5710,11 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
             .support = dp_netdev_support,
         };
 
+        /* Gather the whole data for printing the packet (if debug enabled) */
+        if (!dp_packet_is_linear(packet_)) {
+            dp_packet_linearize(packet_);
+        }
+
         ofpbuf_init(&key, 0);
         odp_flow_key_from_flow(&odp_parms, &key);
         packet_str = ofp_dp_packet_to_string(packet_);
@@ -5954,6 +5959,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     bool smc_enable_db;
     size_t map_cnt = 0;
     bool batch_enable = true;
+    int error;
 
     atomic_read_relaxed(&pmd->dp->smc_enable_db, &smc_enable_db);
     atomic_read_relaxed(&pmd->dp->emc_insert_min, &cur_min);
@@ -6001,7 +6007,12 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
-        miniflow_extract(packet, &key->mf);
+        error = miniflow_extract(packet, &key->mf);
+        if (OVS_UNLIKELY(error)) {
+            dp_packet_delete(packet);
+            continue;
+        }
+
         key->len = 0; /* Not computed yet. */
         /* If EMC and SMC disabled skip hash computation */
         if (smc_enable_db == true || cur_min != 0) {

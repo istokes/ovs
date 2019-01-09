@@ -132,6 +132,31 @@ static const uint32_t crc32Table[256] = {
     0xBE2DA0A5L, 0x4C4623A6L, 0x5F16D052L, 0xAD7D5351L
 };
 
+uint32_t
+crc32c_continue(uint32_t partial, const uint8_t *data, size_t size)
+{
+    while (size--) {
+        partial = crc32Table[(partial ^ *data++) & 0xff] ^ (partial >> 8);
+    }
+
+    return partial;
+}
+
+ovs_be32
+crc32c_finish(uint32_t partial)
+{
+    /* The result of this CRC calculation provides us a value in the reverse
+     * byte-order as compared with our architecture. On big-endian systems,
+     * this is opposite to our return type. So, to return a big-endian
+     * value, we must swap the byte-order. */
+#if defined(WORDS_BIGENDIAN)
+    crc = uint32_byteswap(partial);
+#endif
+
+    /* Our value is in network byte-order. OVS_FORCE keeps sparse happy. */
+    return (OVS_FORCE ovs_be32) ~partial;
+}
+
 /*
  * Compute a CRC32c checksum as per the SCTP requirements in RFC4960. This
  * includes beginning with a checksum of all ones, and returning the negated
@@ -141,19 +166,5 @@ ovs_be32
 crc32c(const uint8_t *data, size_t size)
 {
     uint32_t crc = 0xffffffffL;
-
-    while (size--) {
-        crc = crc32Table[(crc ^ *data++) & 0xff] ^ (crc >> 8);
-    }
-
-    /* The result of this CRC calculation provides us a value in the reverse
-     * byte-order as compared with our architecture. On big-endian systems,
-     * this is opposite to our return type. So, to return a big-endian
-     * value, we must swap the byte-order. */
-#if defined(WORDS_BIGENDIAN)
-    crc = uint32_byteswap(crc);
-#endif
-
-    /* Our value is in network byte-order. OVS_FORCE keeps sparse happy. */
-    return (OVS_FORCE ovs_be32) ~crc;
+    return crc32c_finish(crc32c_continue(crc, data, size));
 }

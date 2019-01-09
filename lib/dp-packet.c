@@ -103,6 +103,9 @@ void
 dp_packet_init_dpdk(struct dp_packet *b)
 {
     b->source = DPBUF_DPDK;
+#ifdef DPDK_NETDEV
+    b->mstate = NULL;
+#endif
 }
 
 /* Initializes 'b' as an empty dp_packet with an initial capacity of 'size'
@@ -120,6 +123,21 @@ dp_packet_uninit(struct dp_packet *b)
     if (b) {
         if (b->source == DPBUF_MALLOC) {
             free(dp_packet_base(b));
+
+#ifdef DPDK_NETDEV
+            /* Packet has been "linearized" */
+            if (b->mstate) {
+                b->source = DPBUF_DPDK;
+                b->mbuf.buf_addr = b->mstate->addr;
+                b->mbuf.buf_len = b->mstate->len;
+                b->mbuf.data_off = b->mstate->off;
+
+                free(b->mstate);
+                b->mstate = NULL;
+
+                free_dpdk_buf((struct dp_packet *) b);
+            }
+#endif
         } else if (b->source == DPBUF_DPDK) {
 #ifdef DPDK_NETDEV
             /* If this dp_packet was allocated by DPDK it must have been

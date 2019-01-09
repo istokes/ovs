@@ -700,6 +700,11 @@ netdev_bsd_send(struct netdev *netdev_, int qid OVS_UNUSED,
     }
 
     DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+        /* We need the whole data to send the packet on the device */
+        if (!dp_packet_is_linear(packet)) {
+            dp_packet_linearize(packet);
+        }
+
         const void *data = dp_packet_data(packet);
         size_t size = dp_packet_size(packet);
 

@@ -159,8 +159,8 @@ tcp_payload_length(struct dp_packet *pkt)
 {
     const char *tcp_payload = dp_packet_get_tcp_payload(pkt);
     if (tcp_payload) {
-        return ((char *) dp_packet_tail(pkt) - dp_packet_l2_pad_size(pkt)
-                - tcp_payload);
+        return dp_packet_l4_size(pkt) -
+               (tcp_payload - (char *) dp_packet_l4(pkt));
     } else {
         return 0;
     }

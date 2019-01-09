@@ -668,7 +668,8 @@ lldp_process_packet(struct lldp *lldp, const struct dp_packet *p)
 {
     if (lldp) {
         lldpd_recv(lldp->lldpd, lldpd_first_hardware(lldp->lldpd),
-                   (char *) dp_packet_data(p), dp_packet_size(p));
+                   (char *) dp_packet_data(p),
+                   dp_packet_size(p));
     }
 }
 

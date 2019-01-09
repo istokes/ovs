@@ -65,7 +65,7 @@ netdev_tnl_ip_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
     void *nh;
     struct ip_header *ip;
     struct ovs_16aligned_ip6_hdr *ip6;
-    void *l4;
+    char *l4;
     int l3_size;
 
     nh = dp_packet_l3(packet);
@@ -79,15 +79,15 @@ netdev_tnl_ip_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
 
     *hlen = sizeof(struct eth_header);
 
-    l3_size = dp_packet_size(packet) -
-              ((char *)nh - (char *)dp_packet_data(packet));
+    l3_size = dp_packet_l3_size(packet);
 
     if (IP_VER(ip->ip_ihl_ver) == 4) {
 
         ovs_be32 ip_src, ip_dst;
 
         if (OVS_UNLIKELY(!dp_packet_ip_checksum_valid(packet))) {
-            if (csum(ip, IP_IHL(ip->ip_ihl_ver) * 4)) {
+            if (packet_csum(packet, packet->l3_ofs,
+                            IP_IHL(ip->ip_ihl_ver) * 4)) {
                 VLOG_WARN_RL(&err_rl, "ip packet has invalid checksum");
                 return NULL;
             }
@@ -196,10 +196,8 @@ udp_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
                 csum = packet_csum_pseudoheader(dp_packet_l3(packet));
             }
 
-            csum = csum_continue(csum, udp, dp_packet_size(packet) -
-                                 ((const unsigned char *)udp -
-                                  (const unsigned char *)dp_packet_eth(packet)
-                                 ));
+            csum = packet_csum_continue(packet, csum, packet->l4_ofs,
+                                        dp_packet_l4_size(packet));
             if (csum_finish(csum)) {
                 return NULL;
             }
@@ -236,7 +234,7 @@ netdev_tnl_push_udp_header(const struct netdev *netdev OVS_UNUSED,
             csum = packet_csum_pseudoheader(netdev_tnl_ip_hdr(dp_packet_data(packet)));
         }
 
-        csum = csum_continue(csum, udp, ip_tot_size);
+        csum = packet_csum_continue(packet, csum, packet->l4_ofs, ip_tot_size);
         udp->udp_csum = csum_finish(csum);
 
         if (!udp->udp_csum) {
@@ -373,9 +371,8 @@ parse_gre_header(struct dp_packet *packet,
     if (greh->flags & htons(GRE_CSUM)) {
         ovs_be16 pkt_csum;
 
-        pkt_csum = csum(greh, dp_packet_size(packet) -
-                              ((const unsigned char *)greh -
-                               (const unsigned char *)dp_packet_eth(packet)));
+        pkt_csum = packet_csum(packet, packet->l4_ofs,
+                               dp_packet_l4_size(packet));
         if (pkt_csum) {
             return -EINVAL;
         }
@@ -448,8 +445,9 @@ netdev_gre_push_header(const struct netdev *netdev,
     greh = netdev_tnl_push_ip_header(packet, data->header, data->header_len, &ip_tot_size);
 
     if (greh->flags & htons(GRE_CSUM)) {
-        ovs_be16 *csum_opt = (ovs_be16 *) (greh + 1);
-        *csum_opt = csum(greh, ip_tot_size);
+        greh = dp_packet_l4(packet);
+        ovs_be16 *csum_opt = (ovs_be16 *) greh;
+        *csum_opt = packet_csum(packet, packet->l4_ofs, ip_tot_size);
     }
 
     if (greh->flags & htons(GRE_SEQ)) {

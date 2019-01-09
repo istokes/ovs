@@ -1737,7 +1737,8 @@ stp_process_packet(const struct xport *xport, const struct dp_packet *packet)
     }
 
     if (dp_packet_try_pull(&payload, ETH_HEADER_LEN + LLC_HEADER_LEN)) {
-        stp_received_bpdu(sp, dp_packet_data(&payload), dp_packet_size(&payload));
+        stp_received_bpdu(sp, dp_packet_data(&payload),
+                          dp_packet_size(&payload));
     }
 }
 
@@ -1788,7 +1789,8 @@ rstp_process_packet(const struct xport *xport, const struct dp_packet *packet)
     }
 
     if (dp_packet_try_pull(&payload, ETH_HEADER_LEN + LLC_HEADER_LEN)) {
-        rstp_port_received_bpdu(xport->rstp_port, dp_packet_data(&payload),
+        rstp_port_received_bpdu(xport->rstp_port,
+                                dp_packet_data(&payload),
                                 dp_packet_size(&payload));
     }
 }
@@ -2563,6 +2565,7 @@ update_mcast_snooping_table4__(const struct xlate_ctx *ctx,
 
     offset = (char *) dp_packet_l4(packet) - (char *) dp_packet_data(packet);
     igmp = dp_packet_at(packet, offset, IGMP_HEADER_LEN);
+
     if (!igmp || csum(igmp, dp_packet_l4_size(packet)) != 0) {
         xlate_report_debug(ctx, OFT_DETAIL,
                            "multicast snooping received bad IGMP "
@@ -2975,6 +2978,13 @@ xlate_normal(struct xlate_ctx *ctx)
         && is_ip_any(flow)) {
         struct mcast_snooping *ms = ctx->xbridge->ms;
         struct mcast_group *grp = NULL;
+        struct dp_packet *p = CONST_CAST(struct dp_packet *,
+                                         ctx->xin->packet);
+
+        /* We will need the whole data for processing the packet below */
+        if (p && !dp_packet_is_linear(p)) {
+            dp_packet_linearize(p);
+        }
 
         if (is_igmp(flow, wc)) {
             /*
@@ -3279,7 +3289,8 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
     const struct flow *flow = &ctx->xin->flow;
     struct flow_wildcards *wc = ctx->wc;
     const struct xbridge *xbridge = ctx->xbridge;
-    const struct dp_packet *packet = ctx->xin->packet;
+    struct dp_packet *packet = CONST_CAST(struct dp_packet *,
+                                          ctx->xin->packet);
     enum slow_path_reason slow;
 
     if (!xport) {
@@ -3291,6 +3302,11 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
         slow = SLOW_CFM;
     } else if (xport->bfd && bfd_should_process_flow(xport->bfd, flow, wc)) {
         if (packet) {
+            /* Gather the whole data for further processing */
+            if (!dp_packet_is_linear(packet)) {
+                dp_packet_linearize(packet);
+            }
+
             bfd_process_packet(xport->bfd, flow, packet);
             /* If POLL received, immediately sends FINAL back. */
             if (bfd_should_send_packet(xport->bfd)) {
@@ -3307,6 +3323,11 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
     } else if ((xbridge->stp || xbridge->rstp) &&
                stp_should_process_flow(flow, wc)) {
         if (packet) {
+            /* Gather the whole data for further processing */
+            if (!dp_packet_is_linear(packet)) {
+                dp_packet_linearize(packet);
+            }
+
             xbridge->stp
                 ? stp_process_packet(xport, packet)
                 : rstp_process_packet(xport, packet);
@@ -3314,6 +3335,11 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
         slow = SLOW_STP;
     } else if (xport->lldp && lldp_should_process_flow(xport->lldp, flow)) {
         if (packet) {
+            /* Gather the whole data for further processing */
+            if (!dp_packet_is_linear(packet)) {
+                dp_packet_linearize(packet);
+            }
+
             lldp_process_packet(xport->lldp, packet);
         }
         slow = SLOW_LLDP;

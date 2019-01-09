@@ -231,8 +231,16 @@ static void
 odp_set_nd(struct dp_packet *packet, const struct ovs_key_nd *key,
            const struct ovs_key_nd *mask)
 {
-    const struct ovs_nd_msg *ns = dp_packet_l4(packet);
-    const struct ovs_nd_lla_opt *lla_opt = dp_packet_get_nd_payload(packet);
+    const struct ovs_nd_msg *ns;
+    const struct ovs_nd_lla_opt *lla_opt;
+
+    /* To orocess neighbor discovery options, we need the whole packet */
+    if (!dp_packet_is_linear(packet)) {
+        dp_packet_linearize(packet);
+    }
+
+    ns = dp_packet_l4(packet);
+    lla_opt = dp_packet_get_nd_payload(packet);
 
     if (OVS_LIKELY(ns && lla_opt)) {
         int bytes_remain = dp_packet_l4_size(packet) - sizeof(*ns);

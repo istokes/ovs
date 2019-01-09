@@ -94,8 +94,12 @@ send_bpdu(struct dp_packet *pkt, int port_no, void *b_)
     assert(port_no < b->n_ports);
     lan = b->ports[port_no];
     if (lan) {
-        const void *data = dp_packet_l3(pkt);
-        size_t size = (char *) dp_packet_tail(pkt) - (char *) data;
+        if (!dp_packet_is_linear(pkt)) {
+            dp_packet_linearize(pkt);
+        }
+
+        const char *data = dp_packet_l3(pkt);
+        size_t size = dp_packet_size(pkt) - pkt->l3_ofs;
         int i;
 
         for (i = 0; i < lan->n_conns; i++) {
