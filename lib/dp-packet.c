@@ -23,6 +23,11 @@
 #include "openvswitch/dynamic-string.h"
 #include "util.h"
 
+#ifdef DPDK_NETDEV
+#define MBUF_BUF_END(BUF_ADDR, BUF_LEN) \
+    (char *) (((char *) BUF_ADDR) + BUF_LEN)
+#endif
+
 static void
 dp_packet_init__(struct dp_packet *b, size_t allocated, enum dp_packet_source source)
 {
@@ -290,6 +295,100 @@ dp_packet_prealloc_headroom(struct dp_packet *b, size_t size)
     }
 }
 
+#ifdef DPDK_NETDEV
+/* Write len data bytes in a mbuf at specified offset.
+ *
+ * 'mbuf', pointer to the destination mbuf where 'ofs' is, and the mbuf where
+ * the data will first be written.
+ * 'ofs', the offset within the provided 'mbuf' where 'data' is to be written.
+ * 'len', the size of the to be written 'data'.
+ * 'data', pointer to the to be written bytes.
+ *
+ * Note: This function is the counterpart of the `rte_pktmbuf_read()` function
+ * available with DPDK, in the rte_mbuf.h */
+void
+dp_packet_mbuf_write(struct rte_mbuf *mbuf, int16_t ofs, uint32_t len,
+                     const void *data)
+{
+    char *dst_addr;
+    uint16_t data_len;
+    int len_copy;
+    while (mbuf) {
+        if (len == 0) {
+            break;
+        }
+
+        dst_addr = rte_pktmbuf_mtod_offset(mbuf, char *, ofs);
+        data_len = MBUF_BUF_END(mbuf->buf_addr, mbuf->buf_len) - dst_addr;
+
+        len_copy = MIN(len, data_len);
+        /* We don't know if 'data' is the result of a rte_pktmbuf_read() call,
+         * in which case we may end up writing to the same region of memory we
+         * are reading from and overlapping. Hence the use of memmove() here */
+        memmove(dst_addr, data, len_copy);
+
+        data = ((char *) data) + len_copy;
+        len -= len_copy;
+        ofs = 0;
+
+        mbuf->data_len = len_copy;
+        mbuf = mbuf->next;
+    }
+}
+
+static void
+dp_packet_mbuf_shift_(struct rte_mbuf *dbuf, int16_t dst_ofs,
+                      const struct rte_mbuf *sbuf, uint16_t src_ofs, int len)
+{
+    char *rd = xmalloc(sizeof(*rd) * len);
+    const char *wd = rte_pktmbuf_read(sbuf, src_ofs, len, rd);
+
+    ovs_assert(wd);
+
+    dp_packet_mbuf_write(dbuf, dst_ofs, len, wd);
+
+    free(rd);
+}
+
+/* Similarly to dp_packet_shift(), shifts the data within the mbufs of a
+ * dp_packet of DPBUF_DPDK source by 'delta' bytes.
+ * Caller must make sure of the following conditions:
+ * - When shifting left, delta can't be bigger than the data_len available in
+ *   the last mbuf;
+ * - When shifting right, delta can't be bigger than the space available in the
+ *   first mbuf (buf_len - data_off).
+ * Both these conditions guarantee that a shift operation doesn't fall outside
+ * the bounds of the existing mbufs, so that the first and last mbufs (when
+ * using multi-segment mbufs), remain the same. */
+static void
+dp_packet_mbuf_shift(struct dp_packet *b, int delta)
+{
+    uint16_t src_ofs;
+    int16_t dst_ofs;
+
+    struct rte_mbuf *mbuf = CONST_CAST(struct rte_mbuf *, &b->mbuf);
+    struct rte_mbuf *tmbuf = rte_pktmbuf_lastseg(mbuf);
+
+    if (delta < 0) {
+        ovs_assert(-delta <= tmbuf->data_len);
+    } else {
+        ovs_assert(delta < (mbuf->buf_len - mbuf->data_off));
+    }
+
+    /* Set the destination and source offsets to copy to */
+    dst_ofs = delta;
+    src_ofs = 0;
+
+    /* Shift data from src mbuf and offset to dst mbuf and offset */
+    dp_packet_mbuf_shift_(mbuf, dst_ofs, mbuf, src_ofs,
+                          rte_pktmbuf_pkt_len(mbuf));
+
+    /* Update mbufs' properties, and if using multi-segment mbufs, first and
+     * last mbuf's data_len also needs to be adjusted */
+    mbuf->data_off = mbuf->data_off + dst_ofs;
+}
+#endif
+
 /* Shifts all of the data within the allocated space in 'b' by 'delta' bytes.
  * For example, a 'delta' of 1 would cause each byte of data to move one byte
  * forward (from address 'p' to 'p+1'), and a 'delta' of -1 would cause each
@@ -302,6 +401,12 @@ dp_packet_shift(struct dp_packet *b, int delta)
                : true);
 
     if (delta != 0) {
+#ifdef DPDK_NETDEV
+        if (b->source == DPBUF_DPDK) {
+            dp_packet_mbuf_shift(b, delta);
+            return;
+        }
+#endif
         char *dst = (char *) dp_packet_data(b) + delta;
         memmove(dst, dp_packet_data(b), dp_packet_size(b));
         dp_packet_set_data(b, dst);

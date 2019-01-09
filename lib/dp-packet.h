@@ -136,6 +136,9 @@ static inline void *dp_packet_at_assert(const struct dp_packet *,
 #ifdef DPDK_NETDEV
 static inline const struct rte_mbuf *
 dp_packet_mbuf_from_offset(const struct dp_packet *b, size_t *offset);
+void
+dp_packet_mbuf_write(struct rte_mbuf *mbuf, int16_t ofs, uint32_t len,
+                     const void *data);
 #endif
 static inline void *dp_packet_tail(const struct dp_packet *);
 static inline void *dp_packet_end(const struct dp_packet *);
