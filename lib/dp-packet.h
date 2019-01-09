@@ -426,20 +426,78 @@ dp_packet_size(const struct dp_packet *b)
     return b->mbuf.pkt_len;
 }
 
+/* Sets the size of the packet 'b' to 'v'. For non-DPDK packets this only means
+ * setting b->size_, but if used in a DPDK packet it means adjusting the first
+ * mbuf pkt_len and last mbuf data_len, to reflect the real size, which can
+ * lead to free'ing tail mbufs that are no longer used.
+ *
+ * This function should be used for setting the size only, and if there's an
+ * assumption that the tail end of 'b' will be trimmed. For adjusting the head
+ * 'end' of 'b', dp_packet_pull() should be used instead. */
 static inline void
 dp_packet_set_size(struct dp_packet *b, uint32_t v)
 {
-    /* netdev-dpdk does not currently support segmentation; consequently, for
-     * all intents and purposes, 'data_len' (16 bit) and 'pkt_len' (32 bit) may
-     * be used interchangably.
-     *
-     * On the datapath, it is expected that the size of packets
-     * (and thus 'v') will always be <= UINT16_MAX; this means that there is no
-     * loss of accuracy in assigning 'v' to 'data_len'.
-     */
-    b->mbuf.data_len = (uint16_t)v;  /* Current seg length. */
-    b->mbuf.pkt_len = v;             /* Total length of all segments linked to
-                                      * this segment. */
+    if (b->source == DPBUF_DPDK) {
+        struct rte_mbuf *mbuf = &b->mbuf;
+        uint16_t new_len = v;
+        uint16_t data_len;
+        uint16_t nb_segs = 0;
+        uint16_t pkt_len = 0;
+
+        /* Trim 'v' length bytes from the end of the chained buffers, freeing
+         * any buffers that may be left floating.
+         *
+         * For that traverse over the entire mbuf chain and, for each mbuf,
+         * subtract its 'data_len' from 'new_len' (initially set to 'v'), which
+         * essentially spreads 'new_len' between all existing mbufs in the
+         * chain. While traversing the mbuf chain, we end the traversal if:
+         * - 'new_size' reaches 0, meaning the passed 'v' has been
+         *   appropriately spread over the mbuf chain. The remaining mbufs are
+         *   freed;
+         * - We reach the last mbuf in the chain, in which case we set the last
+         *   mbuf's 'data_len' to the minimum value between the current
+         *   'new_len' (what's leftover from 'v') size and the maximum data the
+         *   mbuf can hold (mbuf->buf_len - mbuf->data_off).
+         *
+         * The above formula will thus make sure that when a 'v' is smaller
+         * than the overall 'pkt_len' (sum of all 'data_len'), it sets the new
+         * size and frees the leftover mbufs. In the other hand, if 'v' is
+         * bigger, it sets the size to the maximum available space, but no more
+         * than that. */
+        while (mbuf) {
+            data_len = MIN(new_len, mbuf->data_len);
+            mbuf->data_len = data_len;
+
+            if (new_len - data_len <= 0) {
+                /* Free the rest of chained mbufs */
+                free_dpdk_buf(CONTAINER_OF(mbuf->next, struct dp_packet,
+                                           mbuf));
+                mbuf->next = NULL;
+            } else if (!mbuf->next) {
+                /* Don't assign more than what we have available */
+                mbuf->data_len = MIN(new_len,
+                                     mbuf->buf_len - mbuf->data_off);
+            }
+
+            new_len -= data_len;
+            nb_segs += 1;
+            pkt_len += mbuf->data_len;
+            mbuf = mbuf->next;
+        }
+
+        /* pkt_len != v would effectively mean that pkt_len < than 'v' (as
+         * being bigger is logically impossible). Being < than 'v' would mean
+         * the 'v' provided was bigger than the available room, which is the
+         * responsibility of the caller to make sure there is enough room */
+        ovs_assert(pkt_len == v);
+
+        b->mbuf.nb_segs = nb_segs;
+        b->mbuf.pkt_len = pkt_len;
+    } else {
+        b->mbuf.data_len = v;
+        /* Total length of all segments linked to this segment. */
+        b->mbuf.pkt_len = v;
+    }
 }
 
 static inline uint16_t
@@ -451,7 +509,26 @@ __packet_data(const struct dp_packet *b)
 static inline void
 __packet_set_data(struct dp_packet *b, uint16_t v)
 {
-    b->mbuf.data_off = v;
+    if (b->source == DPBUF_DPDK) {
+        /* Moving data_off away from the first mbuf in the chain is not a
+         * possibility using DPBUF_DPDK dp_packets */
+        ovs_assert(v == UINT16_MAX || v <= b->mbuf.buf_len);
+
+        uint16_t prev_ofs = b->mbuf.data_off;
+        b->mbuf.data_off = v;
+        int16_t ofs_diff = prev_ofs - b->mbuf.data_off;
+
+        /* When dealing with DPDK mbufs, keep data_off and data_len in sync.
+         * Thus, update data_len if the length changes with the move of
+         * data_off. However, if data_len is 0, there's no data to move and
+         * data_len should remain 0. */
+
+        if (b->mbuf.data_len != 0) {
+            b->mbuf.data_len += ofs_diff;
+        }
+    } else {
+        b->mbuf.data_off = v;
+    }
 }
 
 static inline uint16_t
