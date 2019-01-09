@@ -168,7 +168,8 @@ SYSTEM_DPDK_TESTSUITE_AT = \
 	tests/system-common-macros.at \
 	tests/system-dpdk-macros.at \
 	tests/system-dpdk-testsuite.at \
-	tests/system-dpdk.at
+	tests/system-dpdk.at \
+	tests/dpdk-packet-mbufs.at
 
 check_SCRIPTS += tests/atlocal
 
@@ -423,6 +424,10 @@ tests_ovstest_SOURCES = \
 	tests/test-vconn.c \
 	tests/test-aa.c \
 	tests/test-stopwatch.c
+if DPDK_NETDEV
+tests_ovstest_SOURCES += \
+	tests/test-dpdk-mbufs.c
+endif
 
 if !WIN32
 tests_ovstest_SOURCES += \
@@ -435,6 +440,9 @@ tests_ovstest_SOURCES += \
 endif
 
 tests_ovstest_LDADD = lib/libopenvswitch.la ovn/lib/libovn.la
+if DPDK_NETDEV
+tests_ovstest_LDFLAGS = $(AM_LDFLAGS) $(DPDK_vswitchd_LDFLAGS)
+endif
 
 noinst_PROGRAMS += tests/test-stream
 tests_test_stream_SOURCES = tests/test-stream.c

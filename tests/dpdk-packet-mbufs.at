@@ -1,0 +1,7 @@
+AT_BANNER([OVS-DPDK dp_packet unit tests])
+
+AT_SETUP([OVS-DPDK dp_packet - mbufs allocation])
+AT_KEYWORDS([dp_packet, multi-seg, mbufs])
+AT_CHECK(ovstest test-dpdk-packet, [], [ignore], [ignore])
+
+AT_CLEANUP
