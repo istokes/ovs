@@ -41,11 +41,11 @@ static void
 dp_packet_use__(struct dp_packet *b, void *base, size_t allocated,
              enum dp_packet_source source)
 {
+    dp_packet_init__(b, allocated, source);
+
     dp_packet_set_base(b, base);
     dp_packet_set_data(b, base);
     dp_packet_set_size(b, 0);
-
-    dp_packet_init__(b, allocated, source);
 }
 
 /* Initializes 'b' as an empty dp_packet that contains the 'allocated' bytes of
