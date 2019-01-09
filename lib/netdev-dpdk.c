@@ -550,6 +550,25 @@ dpdk_rte_mzalloc(size_t sz)
     return rte_zmalloc(OVS_VPORT_DPDK, sz, OVS_CACHE_LINE_SIZE);
 }
 
+static struct rte_mbuf *
+dpdk_buf_alloc(struct rte_mempool *mp)
+{
+    struct rte_mbuf *mbuf = NULL;
+
+    /* If non-pmd we need to lock on nonpmd_mp_mutex mutex. */
+    if (dpdk_thread_is_pmd()) {
+        mbuf = rte_pktmbuf_alloc(mp);
+    } else {
+        ovs_mutex_lock(&nonpmd_mp_mutex);
+
+        mbuf = rte_pktmbuf_alloc(mp);
+
+        ovs_mutex_unlock(&nonpmd_mp_mutex);
+    }
+
+    return mbuf;
+}
+
 void
 free_dpdk_buf(struct dp_packet *p)
 {
@@ -2333,6 +2352,56 @@ out:
     }
 }
 
+static int
+dpdk_copy_dp_packet_to_mbuf(struct dp_packet *packet, struct rte_mbuf **head,
+                            struct rte_mempool *mp)
+{
+    struct rte_mbuf *mbuf, *fmbuf;
+    uint16_t max_data_len;
+    uint32_t nb_segs = 0;
+    uint32_t size = 0;
+
+    /* We will need the whole data for copying below. */
+    if (!dp_packet_is_linear(packet)) {
+        dp_packet_linearize(packet);
+    }
+
+    /* Allocate first mbuf to know the size of data available. */
+    fmbuf = mbuf = *head = dpdk_buf_alloc(mp);
+    if (OVS_UNLIKELY(!mbuf)) {
+        return ENOMEM;
+    }
+
+    size = dp_packet_size(packet);
+
+    /* All new allocated mbuf's max data len is the same. */
+    max_data_len = mbuf->buf_len - mbuf->data_off;
+
+    /* Calculate # of output mbufs. */
+    nb_segs = size / max_data_len;
+    if (size % max_data_len) {
+        nb_segs = nb_segs + 1;
+    }
+
+    /* Allocate additional mbufs, less the one alredy allocated above. */
+    for (int i = 1; i < nb_segs; i++) {
+        mbuf->next = dpdk_buf_alloc(mp);
+        if (!mbuf->next) {
+            free_dpdk_buf(CONTAINER_OF(fmbuf, struct dp_packet, mbuf));
+            fmbuf = NULL;
+            return ENOMEM;
+        }
+        mbuf = mbuf->next;
+    }
+
+    fmbuf->nb_segs = nb_segs;
+    fmbuf->pkt_len = size;
+
+    dp_packet_mbuf_write(fmbuf, 0, size, dp_packet_data(packet));
+
+    return 0;
+}
+
 /* Tx function. Transmit packets indefinitely */
 static void
 dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
@@ -2349,6 +2418,7 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
     struct rte_mbuf *pkts[PKT_ARRAY_SIZE];
     uint32_t cnt = batch_cnt;
     uint32_t dropped = 0;
+    uint32_t i;
 
     if (dev->type != DPDK_DEV_VHOST) {
         /* Check if QoS has been configured for this netdev. */
@@ -2359,28 +2429,29 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
 
     uint32_t txcnt = 0;
 
-    for (uint32_t i = 0; i < cnt; i++) {
+    for (i = 0; i < cnt; i++) {
         struct dp_packet *packet = batch->packets[i];
         uint32_t size = dp_packet_size(packet);
+        int err = 0;
 
         if (OVS_UNLIKELY(size > dev->max_packet_len)) {
             VLOG_WARN_RL(&rl, "Too big size %u max_packet_len %d",
                          size, dev->max_packet_len);
-
             dropped++;
             continue;
         }
 
-        pkts[txcnt] = rte_pktmbuf_alloc(dev->dpdk_mp->mp);
-        if (OVS_UNLIKELY(!pkts[txcnt])) {
+        err = dpdk_copy_dp_packet_to_mbuf(packet, &pkts[txcnt],
+                                          dev->dpdk_mp->mp);
+        if (err != 0) {
+            if (err == ENOMEM) {
+                VLOG_ERR_RL(&rl, "Failed to alloc mbufs! %u packets dropped",
+                            cnt - i);
+            }
+
             dropped += cnt - i;
             break;
         }
-
-        /* We have to do a copy for now */
-        memcpy(rte_pktmbuf_mtod(pkts[txcnt], void *),
-               dp_packet_data(packet), size);
-        dp_packet_set_size((struct dp_packet *)pkts[txcnt], size);
         dp_packet_copy_mbuf_flags((struct dp_packet *)pkts[txcnt], packet);
 
         txcnt++;
