@@ -318,6 +318,16 @@ static struct ovs_mutex dpdk_mp_mutex OVS_ACQ_AFTER(dpdk_mutex)
 static struct ovs_list dpdk_mp_list OVS_GUARDED_BY(dpdk_mp_mutex)
     = OVS_LIST_INITIALIZER(&dpdk_mp_list);
 
+/* This mutex must be used by non pmd threads when allocating or freeing
+ * mbufs through mempools, when outside of the `non_pmd_mutex` mutex, in struct
+ * dp_netdev.
+ * The reason, as pointed out in the "Known Issues" section in DPDK's EAL docs,
+ * is that the implementation on which mempool is based off is non-preemptable.
+ * Since non-pmds may end up not being pinned this could lead to the preemption
+ * between non-pmds performing operations on the same mempool, which could lead
+ * to memory corruption. */
+static struct ovs_mutex nonpmd_mp_mutex = OVS_MUTEX_INITIALIZER;
+
 struct dpdk_mp {
      struct rte_mempool *mp;
      int mtu;
@@ -490,6 +500,8 @@ struct netdev_rxq_dpdk {
     dpdk_port_t port_id;
 };
 
+static bool dpdk_thread_is_pmd(void);
+
 static void netdev_dpdk_destruct(struct netdev *netdev);
 static void netdev_dpdk_vhost_destruct(struct netdev *netdev);
 
@@ -523,6 +535,12 @@ dpdk_buf_size(int mtu)
             + RTE_PKTMBUF_HEADROOM;
 }
 
+static bool
+dpdk_thread_is_pmd(void)
+{
+     return rte_lcore_id() != NON_PMD_CORE_ID;
+}
+
 /* Allocates an area of 'sz' bytes from DPDK.  The memory is zero'ed.
  *
  * Unlike xmalloc(), this function can return NULL on failure. */
@@ -535,9 +553,18 @@ dpdk_rte_mzalloc(size_t sz)
 void
 free_dpdk_buf(struct dp_packet *p)
 {
-    struct rte_mbuf *pkt = (struct rte_mbuf *) p;
+    /* If non-pmd we need to lock on nonpmd_mp_mutex mutex */
+    if (!dpdk_thread_is_pmd()) {
+        ovs_mutex_lock(&nonpmd_mp_mutex);
 
-    rte_pktmbuf_free(pkt);
+        rte_pktmbuf_free(&p->mbuf);
+
+        ovs_mutex_unlock(&nonpmd_mp_mutex);
+
+        return;
+    }
+
+    rte_pktmbuf_free(&p->mbuf);
 }
 
 static void
