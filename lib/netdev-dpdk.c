@@ -2381,6 +2381,7 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
         memcpy(rte_pktmbuf_mtod(pkts[txcnt], void *),
                dp_packet_data(packet), size);
         dp_packet_set_size((struct dp_packet *)pkts[txcnt], size);
+        dp_packet_copy_mbuf_flags((struct dp_packet *)pkts[txcnt], packet);
 
         txcnt++;
     }

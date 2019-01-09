@@ -159,39 +159,63 @@ dp_packet_clone(const struct dp_packet *buffer)
     return dp_packet_clone_with_headroom(buffer, 0);
 }
 
-/* Creates and returns a new dp_packet whose data are copied from 'buffer'.
- * The returned dp_packet will additionally have 'headroom' bytes of
- * headroom. */
+#ifdef DPDK_NETDEV
 struct dp_packet *
-dp_packet_clone_with_headroom(const struct dp_packet *buffer, size_t headroom)
-{
+dp_packet_clone_with_headroom(const struct dp_packet *b, size_t headroom) {
     struct dp_packet *new_buffer;
+    uint32_t pkt_len = dp_packet_size(b);
 
-    new_buffer = dp_packet_clone_data_with_headroom(dp_packet_data(buffer),
-                                                 dp_packet_size(buffer),
-                                                 headroom);
-    /* Copy the following fields into the returned buffer: l2_pad_size,
-     * l2_5_ofs, l3_ofs, l4_ofs, cutlen, packet_type and md. */
-    memcpy(&new_buffer->l2_pad_size, &buffer->l2_pad_size,
-            sizeof(struct dp_packet) -
-            offsetof(struct dp_packet, l2_pad_size));
+    /* Copy multi-seg data. */
+    if (b->source == DPBUF_DPDK && !rte_pktmbuf_is_contiguous(&b->mbuf)) {
+        void *dst = NULL;
+        struct rte_mbuf *mbuf = CONST_CAST(struct rte_mbuf *, &b->mbuf);
 
-#ifdef DPDK_NETDEV
-    new_buffer->mbuf.ol_flags = buffer->mbuf.ol_flags;
-#else
-    new_buffer->rss_hash_valid = buffer->rss_hash_valid;
-#endif
+        new_buffer = dp_packet_new_with_headroom(pkt_len, headroom);
+        dst = dp_packet_data(new_buffer);
+        dp_packet_set_size(new_buffer, pkt_len);
 
+        if (!rte_pktmbuf_read(mbuf, 0, pkt_len, dst)) {
+            dp_packet_delete(new_buffer);
+            return NULL;
+        }
+    } else {
+        new_buffer = dp_packet_clone_data_with_headroom(dp_packet_data(b),
+                                                        dp_packet_size(b),
+                                                        headroom);
+    }
+
+    dp_packet_copy_common_members(new_buffer, b);
+
+    dp_packet_copy_mbuf_flags(new_buffer, b);
     if (dp_packet_rss_valid(new_buffer)) {
-#ifdef DPDK_NETDEV
-        new_buffer->mbuf.hash.rss = buffer->mbuf.hash.rss;
-#else
-        new_buffer->rss_hash = buffer->rss_hash;
-#endif
+        new_buffer->mbuf.hash.rss = b->mbuf.hash.rss;
     }
 
     return new_buffer;
 }
+#else
+/* Creates and returns a new dp_packet whose data are copied from 'buffer'.
+ * The returned dp_packet will additionally have 'headroom' bytes of
+ * headroom. */
+struct dp_packet *
+dp_packet_clone_with_headroom(const struct dp_packet *b, size_t headroom)
+{
+    struct dp_packet *new_buffer;
+    uint32_t pkt_len = dp_packet_size(b);
+
+    new_buffer = dp_packet_clone_data_with_headroom(dp_packet_data(b),
+                                                    pkt_len, headroom);
+
+    dp_packet_copy_common_members(new_buffer, b);
+
+    new_buffer->rss_hash_valid = b->rss_hash_valid;
+    if (dp_packet_rss_valid(new_buffer)) {
+        new_buffer->rss_hash = b->rss_hash;
+    }
+
+    return new_buffer;
+}
+#endif
 
 /* Creates and returns a new dp_packet that initially contains a copy of the
  * 'size' bytes of data starting at 'data' with no headroom or tailroom. */

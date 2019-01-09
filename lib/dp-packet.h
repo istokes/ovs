@@ -129,6 +129,10 @@ struct dp_packet *dp_packet_clone_data_with_headroom(const void *, size_t,
                                                      size_t headroom);
 static inline void dp_packet_delete(struct dp_packet *);
 
+static inline void
+dp_packet_copy_common_members(struct dp_packet *new_b,
+                              const struct dp_packet *b);
+
 static inline void *dp_packet_at(const struct dp_packet *, size_t offset,
                                  size_t size);
 static inline void *dp_packet_at_assert(const struct dp_packet *,
@@ -139,6 +143,8 @@ dp_packet_mbuf_from_offset(const struct dp_packet *b, size_t *offset);
 void
 dp_packet_mbuf_write(struct rte_mbuf *mbuf, int16_t ofs, uint32_t len,
                      const void *data);
+static inline void
+dp_packet_copy_mbuf_flags(struct dp_packet *dst, const struct dp_packet *src);
 #endif
 static inline void *dp_packet_tail(const struct dp_packet *);
 static inline void *dp_packet_end(const struct dp_packet *);
@@ -185,6 +191,17 @@ dp_packet_delete(struct dp_packet *b)
         dp_packet_uninit(b);
         free(b);
     }
+}
+
+/* Copies the following fields into the 'new_b', which represent the common
+ * fields between DPDK and non-DPDK packets: l2_pad_size, l2_5_ofs, l3_ofs,
+ * l4_ofs, cutlen, packet_type and md. */
+static inline void
+dp_packet_copy_common_members(struct dp_packet *new_b,
+                              const struct dp_packet *b) {
+    memcpy(&new_b->l2_pad_size, &b->l2_pad_size,
+           sizeof(struct dp_packet) -
+           offsetof(struct dp_packet, l2_pad_size));
 }
 
 /* If 'b' contains at least 'offset + size' bytes of data, returns a pointer to
@@ -698,6 +715,18 @@ static inline void
 dp_packet_set_allocated(struct dp_packet *b, uint16_t s)
 {
     b->mbuf.buf_len = s;
+}
+
+static inline void
+dp_packet_copy_mbuf_flags(struct dp_packet *dst, const struct dp_packet *src)
+{
+    ovs_assert(dst != NULL && src != NULL);
+    struct rte_mbuf *buf_dst = &dst->mbuf;
+    const struct rte_mbuf *buf_src = &src->mbuf;
+
+    buf_dst->ol_flags = buf_src->ol_flags;
+    buf_dst->packet_type = buf_src->packet_type;
+    buf_dst->tx_offload = buf_src->tx_offload;
 }
 
 /* Returns the RSS hash of the packet 'p'.  Note that the returned value is
