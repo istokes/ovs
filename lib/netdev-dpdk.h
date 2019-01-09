@@ -25,6 +25,7 @@ struct dp_packet;
 
 #ifdef DPDK_NETDEV
 
+void netdev_dpdk_multi_segment_mbufs_enable(void);
 void netdev_dpdk_register(void);
 void free_dpdk_buf(struct dp_packet *);
 

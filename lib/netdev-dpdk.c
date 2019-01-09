@@ -70,6 +70,7 @@ enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
 
 VLOG_DEFINE_THIS_MODULE(netdev_dpdk);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+static bool dpdk_multi_segment_mbufs = false;
 
 #define DPDK_PORT_WATCHDOG_INTERVAL 5
 
@@ -519,6 +520,12 @@ is_dpdk_class(const struct netdev_class *class)
            || class->destruct == netdev_dpdk_vhost_destruct;
 }
 
+void
+netdev_dpdk_multi_segment_mbufs_enable(void)
+{
+    dpdk_multi_segment_mbufs = true;
+}
+
 /* DPDK NIC drivers allocate RX buffers at a particular granularity, typically
  * aligned at 1k or less. If a declared mbuf size is not a multiple of this
  * value, insufficient buffers are allocated to accomodate the packet in its
@@ -632,14 +639,17 @@ dpdk_mp_sweep(void) OVS_REQUIRES(dpdk_mp_mutex)
     }
 }
 
-/* Calculating the required number of mbufs differs depending on the
- * mempool model being used. Check if per port memory is in use before
- * calculating.
- */
+/* Calculating the required number of mbufs differs depending on the mempool
+ * model (per port vs shared mempools) being used.
+ * In case multi-segment mbufs are being used, the number of mbufs is also
+ * increased, to account for the multiple mbufs needed to hold each packet's
+ * data. */
 static uint32_t
-dpdk_calculate_mbufs(struct netdev_dpdk *dev, int mtu, bool per_port_mp)
+dpdk_calculate_mbufs(struct netdev_dpdk *dev, int mtu, uint32_t mbuf_size,
+                     bool per_port_mp)
 {
     uint32_t n_mbufs;
+    uint16_t max_frame_len = 0;
 
     if (!per_port_mp) {
         /* Shared memory are being used.
@@ -666,6 +676,22 @@ dpdk_calculate_mbufs(struct netdev_dpdk *dev, int mtu, bool per_port_mp)
                   + dev->requested_n_txq * dev->requested_txq_size
                   + MIN(RTE_MAX_LCORE, dev->requested_n_rxq) * NETDEV_MAX_BURST
                   + MIN_NB_MBUF;
+    }
+
+    /* If multi-segment mbufs are used, we also increase the number of
+     * mbufs used. This is done by calculating how many mbufs are needed to
+     * hold the data on a single packet of MTU size. For example, for a
+     * received packet of 9000B, 5 mbufs (9000 / 2048) are needed to hold
+     * the data - 4 more than with single-mbufs (as mbufs' size is extended
+     * to hold all data) */
+    max_frame_len = MTU_TO_MAX_FRAME_LEN(dev->requested_mtu);
+    if (dpdk_multi_segment_mbufs && mbuf_size < max_frame_len) {
+        uint16_t nb_segs = max_frame_len / mbuf_size;
+        if (max_frame_len % mbuf_size) {
+            nb_segs += 1;
+        }
+
+        n_mbufs *= nb_segs;
     }
 
     return n_mbufs;
@@ -696,8 +722,12 @@ dpdk_mp_create(struct netdev_dpdk *dev, int mtu, bool per_port_mp)
 
     /* Get the size of each mbuf, based on the MTU */
     mbuf_size = MTU_TO_FRAME_LEN(mtu);
+    /* multi-segment mbufs - use standard mbuf size */
+    if (dpdk_multi_segment_mbufs) {
+        mbuf_size = dpdk_buf_size(ETHER_MTU);
+    }
 
-    n_mbufs = dpdk_calculate_mbufs(dev, mtu, per_port_mp);
+    n_mbufs = dpdk_calculate_mbufs(dev, mtu, mbuf_size, per_port_mp);
 
     do {
         /* Full DPDK memory pool name must be unique and cannot be
@@ -956,6 +986,7 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
     int diag = 0;
     int i;
     struct rte_eth_conf conf = port_conf;
+    struct rte_eth_txconf txconf;
     struct rte_eth_dev_info info;
     uint16_t conf_mtu;
 
@@ -969,6 +1000,24 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
         if (dev->hw_ol_features & NETDEV_RX_HW_SCATTER) {
             conf.rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
         }
+    }
+
+    /* Multi-segment-mbuf-specific setup. */
+    if (dpdk_multi_segment_mbufs) {
+        if (info.tx_offload_capa & DEV_TX_OFFLOAD_MULTI_SEGS) {
+            /* Enable multi-seg mbufs. DPDK PMDs typically attempt to use
+             * simple or vectorized transmit functions, neither of which are
+             * compatible with multi-segment mbufs. */
+            conf.txmode.offloads |= DEV_TX_OFFLOAD_MULTI_SEGS;
+        } else {
+            VLOG_WARN("Interface %s doesn't support multi-segment mbufs",
+                      dev->up.name);
+            conf.txmode.offloads &= ~DEV_TX_OFFLOAD_MULTI_SEGS;
+        }
+
+        txconf = info.default_txconf;
+        //txconf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
+        txconf.offloads = conf.txmode.offloads;
     }
 
     conf.intr_conf.lsc = dev->lsc_interrupt_mode;
@@ -1022,7 +1071,9 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
 
         for (i = 0; i < n_txq; i++) {
             diag = rte_eth_tx_queue_setup(dev->port_id, i, dev->txq_size,
-                                          dev->socket_id, NULL);
+                                          dev->socket_id,
+                                          dpdk_multi_segment_mbufs ? &txconf
+                                                                   : NULL);
             if (diag) {
                 VLOG_INFO("Interface %s unable to setup txq(%d): %s",
                           dev->up.name, i, rte_strerror(-diag));
@@ -4220,7 +4271,6 @@ unlock:
 
     return err;
 }
-
 
 /* Find rte_flow with @ufid */
 static struct rte_flow *

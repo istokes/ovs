@@ -71,3 +71,76 @@ Jumbo frame support has been validated against 9728B frames, which is the
 largest frame size supported by Fortville NIC using the DPDK i40e driver, but
 larger frames and other DPDK NIC drivers may be supported. These cases are
 common for use cases involving East-West traffic only.
+
+-------------------
+Multi-segment mbufs
+-------------------
+
+Instead of increasing the size of mbufs within a mempool, such that each mbuf
+within the pool is large enough to contain an entire jumbo frame of a
+user-defined size, mbufs can be chained together instead. In this approach each
+mbuf in the chain stores a portion of the jumbo frame, by default ~2K bytes,
+irrespective of the user-requested MTU value. Since each mbuf in the chain is
+termed a segment, this approach is named "multi-segment mbufs".
+
+This approach may bring more flexibility in use cases where the maximum packet
+length may be hard to guess. For example, in cases where packets originate from
+sources marked for offload (such as TSO), each packet may be larger than the
+MTU, and as such, when forwarding it to a DPDK port a single mbuf may not be
+enough to hold all of the packet's data.
+
+Multi-segment and single-segment mbufs are mutually exclusive, and the user
+must decide on which approach to adopt on initialisation. If multi-segment
+mbufs is to be enabled, it can be done so with the following command::
+
+    $ ovs-vsctl set Open_vSwitch . other_config:dpdk-multi-seg-mbufs=true
+
+Single-segment mbufs still remain the default when using OvS-DPDK, and the
+above option `dpdk-multi-seg-mbufs` must be explicitly set to `true` if
+multi-segment mbufs are to be used.
+
+~~~~~~~~~~~~~~~~~
+Performance notes
+~~~~~~~~~~~~~~~~~
+
+When using multi-segment mbufs some PMDs may not support vectorized Tx
+functions, due to its non-contiguous nature. As a result this can hit
+performance for smaller packet sizes. For example, on a setup sending 64B
+packets at line rate, a decrease of ~20% has been observed. The performance
+impact stops being noticeable for larger packet sizes, although the exact size
+will depend on each PMD, and vary between architectures.
+
+Tests performed with the i40e PMD driver only showed this limitation for 64B
+packets, and the same rate was observed when comparing multi-segment mbufs and
+single-segment mbuf for 128B packets. In other words, the 20% drop in
+performance was not observed for packets >= 128B during this test case.
+
+Because of this, multi-segment mbufs is not advised to be used with smaller
+packet sizes, such as 64B.
+
+Also, note that using multi-segment mbufs won't improve memory usage. For a
+packet of 9000B, for example, which would be stored on a single mbuf when using
+the single-segment approach, 5 mbufs (9000/2176) of 2176B would be needed to
+store the same data using the multi-segment mbufs approach (refer to
+:doc:`/topics/dpdk/memory` for examples).
+
+~~~~~~~~~~~
+Limitations
+~~~~~~~~~~~
+
+Because multi-segment mbufs store the data uncontiguously in memory, when used
+across DPDK and non-DPDK ports, a performance drop is expected, as the mbufs'
+content needs to be copied into a contiguous region in memory to be used by
+operations such as write(). Exchanging traffic between DPDK ports (such as
+vhost and physical ports) doesn't have this limitation, however.
+
+Other operations may have a hit in performance as well, under the current
+implementation. For example, operations that require a checksum to be performed
+on the data, such as pushing / popping a VXLAN header, will also require a copy
+of the data (if it hasn't been copied before), or when using the Userspace
+connection tracker.
+
+Finally, it is assumed that, when enabling the multi-segment mbufs, a packet
+header falls within the first mbuf, which is 2K in size. This is required
+because at the moment the miniflow extraction and setting of the layer headers
+(l2_5, l3, l4) assumes contiguous access to memory.

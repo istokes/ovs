@@ -82,6 +82,14 @@ Users should be aware of the following:
 Below are a number of examples of memory requirement calculations for both
 shared and per port memory models.
 
+.. note::
+
+   If multi-segment mbufs is enabled (:doc:`/topics/dpdk/jumbo-frames`), both
+   the **number of mbufs** and the **size of each mbuf** might be adjusted,
+   which might change slightly the amount of memory required for a given
+   mempool. Examples of how these calculations are performed are also provided
+   below, for the higher MTU case of each memory model.
+
 Shared Memory Calculations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -141,6 +149,20 @@ Example 4
  Number of mbufs = 262144
  Mbuf size = 10176 Bytes
  Memory required = 262144 * 10176 = 2667 MB
+
+Example 5 (multi-segment mbufs enabled)
++++++++++++++++++++++++++++++++++++++++
+::
+
+ MTU = 9000 Bytes
+ Number of mbufs = 262144
+ Mbuf size = 2048 Bytes
+ Memory required = 262144 * (2048 * 5) = 2684 MB
+
+.. note::
+
+   In order to hold 9000B of data, 5 mbufs of 2048B each will be needed, hence
+   the "5" above in 2048 * 5.
 
 Per Port Memory Calculations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -214,3 +236,17 @@ Example 3: (2 rxq, 2 PMD, 9000 MTU)
  Number of mbufs = (2 * 2048) + (3 * 2048) + (1 * 32) + (16384) = 26656
  Mbuf size = 10176 Bytes
  Memory required = 26656 * 10176 = 271 MB
+
+Example 4: (2 rxq, 2 PMD, 9000 MTU, multi-segment mbufs enabled)
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+::
+
+ MTU = 9000
+ Number of mbufs = (2 * 2048) + (3 * 2048) + (1 * 32) + (16384) = 26656
+ Mbuf size = 2048 Bytes
+ Memory required = 26656 * (2048 * 5) = 273 MB
+
+.. note::
+
+   In order to hold 9000B of data, 5 mbufs of 2048B each will be needed, hence
+   the "5" above in 2048 * 5.

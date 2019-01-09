@@ -356,6 +356,28 @@
         </p>
       </column>
 
+      <column name="other_config" key="dpdk-multi-seg-mbufs"
+              type='{"type": "boolean"}'>
+        <p>
+          Specifies if DPDK uses multi-segment mbufs for handling jumbo frames.
+        </p>
+        <p>
+          If true, DPDK allocates a single mempool per port, irrespective of
+          the ports' requested MTU sizes. The elements of this mempool are
+          'standard'-sized mbufs (typically 2k MB), which may be chained
+          together to accommodate jumbo frames. In this approach, each mbuf
+          typically stores a fragment of the overall jumbo frame.
+        </p>
+        <p>
+          If not specified, defaults to <code>false</code>, in which case, the
+          size of each mbuf within a DPDK port's mempool will be grown to
+          accommodate jumbo frames within a single mbuf.
+        </p>
+        <p>
+          Changing this value requires restarting the daemon.
+        </p>
+      </column>
+
       <column name="other_config" key="vhost-sock-dir"
               type='{"type": "string"}'>
         <p>
