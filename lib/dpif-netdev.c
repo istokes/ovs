@@ -4813,8 +4813,11 @@ reconfigure_datapath(struct dp_netdev *dp)
 
     /* Reload affected pmd threads.  We must wait for the pmd threads before
      * reconfiguring the ports, because a port cannot be reconfigured while
-     * it's being used. */
+     * it's being used. We need release dp->port_mutex to make sure that pmds
+     * don't wait for getting the mutex when handling packet upcalls */
+    ovs_mutex_unlock(&dp->port_mutex);
     reload_affected_pmds(dp);
+    ovs_mutex_lock(&dp->port_mutex);
 
     /* Step 3: Reconfigure ports. */
 
@@ -4877,7 +4880,9 @@ reconfigure_datapath(struct dp_netdev *dp)
     /* Reload affected pmd threads.  We must wait for the pmd threads to remove
      * the old queues before readding them, otherwise a queue can be polled by
      * two threads at the same time. */
+    ovs_mutex_unlock(&dp->port_mutex);
     reload_affected_pmds(dp);
+    ovs_mutex_lock(&dp->port_mutex);
 
     /* Step 6: Add queues from scheduling, if they're not there already. */
     HMAP_FOR_EACH (port, node, &dp->ports) {
@@ -4909,7 +4914,9 @@ reconfigure_datapath(struct dp_netdev *dp)
     }
 
     /* Reload affected pmd threads. */
+    ovs_mutex_unlock(&dp->port_mutex);
     reload_affected_pmds(dp);
+    ovs_mutex_lock(&dp->port_mutex);
 
     /* Check if PMD Auto LB is to be enabled */
     set_pmd_auto_lb(dp);
