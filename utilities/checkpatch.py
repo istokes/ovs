@@ -142,7 +142,7 @@ def reset_counters():
 # something in parentheses (usually an expression) then a left curly brace.
 #
 # 'do' almost qualifies but it's also used as "do { ... } while (...);".
-__parenthesized_constructs = 'if|for|while|switch|[_A-Z]+FOR_EACH[_A-Z]*'
+__parenthesized_constructs = 'if|for|while|switch|[_A-Z]+FOR_*EACH[_A-Z]*'
 
 __regex_added_line = re.compile(r'^\+{1,2}[^\+][\w\W]*')
 __regex_subtracted_line = re.compile(r'^\-{1,2}[^\-][\w\W]*')
@@ -163,6 +163,7 @@ __regex_ends_with_bracket = \
 __regex_ptr_declaration_missing_whitespace = re.compile(r'[a-zA-Z0-9]\*[^*]')
 __regex_is_comment_line = re.compile(r'^\s*(/\*|\*\s)')
 __regex_has_comment = re.compile(r'.*(/\*|\*\s)')
+__regex_has_c99_comment = re.compile(r'.*//.*$')
 __regex_trailing_operator = re.compile(r'^[^ ]* [^ ]*[?:]$')
 __regex_conditional_else_bracing = re.compile(r'^\s*else\s*{?$')
 __regex_conditional_else_bracing2 = re.compile(r'^\s*}\selse\s*$')
@@ -296,6 +297,11 @@ def has_comment(line):
     """Returns TRUE if the current line contains a comment or is part of
        a block comment."""
     return __regex_has_comment.match(line) is not None
+
+
+def has_c99_comment(line):
+    """Returns TRUE if the current line contains C99 style comment (//)."""
+    return __regex_has_c99_comment.match(line) is not None
 
 
 def trailing_operator(line):
@@ -518,38 +524,43 @@ checks = [
      'check': lambda x: trailing_whitespace_or_crlf(x),
      'print': lambda: print_warning("Line has trailing whitespace")},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: not is_comment_line(x),
      'check': lambda x: not if_and_for_whitespace_checks(x),
      'print': lambda: print_error("Improper whitespace around control block")},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: not is_comment_line(x),
      'check': lambda x: not if_and_for_end_with_bracket_check(x),
      'print': lambda: print_error("Inappropriate bracing around statement")},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: not is_comment_line(x),
      'check': lambda x: pointer_whitespace_check(x),
      'print':
      lambda: print_error("Inappropriate spacing in pointer declaration")},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: not is_comment_line(x),
      'check': lambda x: trailing_operator(x),
      'print':
      lambda: print_error("Line has '?' or ':' operator at end of line")},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: has_comment(x),
      'check': lambda x: has_xxx_mark(x),
      'print': lambda: print_warning("Comment with 'xxx' marker")},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
+     'prereq': lambda x: not is_comment_line(x),
+     'check': lambda x: has_c99_comment(x),
+     'print': lambda: print_error("C99 style comment")},
+
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: has_comment(x),
      'check': lambda x: check_comment_spelling(x)},
 
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'check': lambda x: empty_return_with_brace(x),
      'interim_line': True,
      'print':
@@ -584,7 +595,7 @@ std_functions = [
         ('error', 'Use ovs_error() in place of error()'),
 ]
 checks += [
-    {'regex': '(\.c|\.h)(\.in)?$',
+    {'regex': r'(\.c|\.h)(\.in)?$',
      'match_name': None,
      'prereq': lambda x: not is_comment_line(x),
      'check': regex_function_factory(function_name),
@@ -601,11 +612,11 @@ infix_operators = \
     [re.escape(op) for op in ['%', '<<', '>>', '<=', '>=', '==', '!=',
             '^', '|', '&&', '||', '?:', '=', '+=', '-=', '*=', '/=', '%=',
             '&=', '^=', '|=', '<<=', '>>=']] \
-    + ['[^<" ]<[^=" ]', '[^->" ]>[^=" ]', '[^ !()/"]\*[^/]', '[^ !&()"]&',
-       '[^" +(]\+[^"+;]', '[^" -(]-[^"->;]', '[^" <>=!^|+\-*/%&]=[^"=]',
+    + ['[^<" ]<[^=" ]', '[^->" ]>[^=" ]', r'[^ !()/"]\*[^/]', '[^ !&()"]&',
+       r'[^" +(]\+[^"+;]', '[^" -(]-[^"->;]', r'[^" <>=!^|+\-*/%&]=[^"=]',
        '[^* ]/[^* ]']
 checks += [
-    {'regex': '(\.c|\.h)(\.in)?$', 'match_name': None,
+    {'regex': r'(\.c|\.h)(\.in)?$', 'match_name': None,
      'prereq': lambda x: not is_comment_line(x),
      'check': regex_operator_factory(operator),
      'print': lambda: print_warning("Line lacks whitespace around operator")}
@@ -694,7 +705,7 @@ def ovs_checkpatch_parse(text, filename, author=None, committer=None):
     current_file = filename if checking_file else ''
     previous_file = ''
     seppatch = re.compile(r'^---([\w]*| \S+)$')
-    hunks = re.compile('^(---|\+\+\+) (\S+)')
+    hunks = re.compile(r'^(---|\+\+\+) (\S+)')
     hunk_differences = re.compile(
         r'^@@ ([0-9-+]+),([0-9-+]+) ([0-9-+]+),([0-9-+]+) @@')
     is_author = re.compile(r'^(Author|From): (.*)$', re.I | re.M | re.S)

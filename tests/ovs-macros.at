@@ -173,7 +173,7 @@ uuidfilt () {
 # prints a message if a bunch of identical processes are running.
 #
 # Not all shells support "exec -a NAME", so test for it.
-if (exec -a myname true); then
+if (exec -a myname true 2>/dev/null); then
     run_as () {
         (exec -a "$@")
     }
@@ -190,6 +190,7 @@ OVS_START_SHELL_HELPERS
 ovs_cleanup() {
     if test "$(echo asan.*)" != 'asan.*'; then
         echo "Address Sanitizer reported errors in:" asan.*
+        cat asan.*
         AT_FAIL_IF([:])
     fi
 }

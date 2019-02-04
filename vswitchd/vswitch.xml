@@ -333,6 +333,28 @@
         </p>
       </column>
 
+      <column name="other_config" key="dpdk-socket-limit"
+              type='{"type": "string"}'>
+        <p>
+          Limits the maximum amount of memory that can be used from the
+          hugepage pool, on a per-socket basis.
+        </p>
+        <p>
+          The specifier is a comma-separated list of memory limits per socket.
+          <code>0</code> will disable the limit for a particular socket.
+        </p>
+        <p>
+          If not specified, OVS will configure limits equal to the amount of
+          preallocated memory specified by <ref column="other_config"
+          key="dpdk-socket-mem"/> or <code>--socket-mem</code> in
+          <ref column="other_config" key="dpdk-extra"/>. If none of the above
+          options specified or <code>--legacy-mem</code> provided in
+          <ref column="other_config" key="dpdk-extra"/>, limits will not be
+          applied.
+          Changing this value requires restarting the daemon.
+        </p>
+      </column>
+
       <column name="other_config" key="dpdk-hugepage-dir"
               type='{"type": "string"}'>
         <p>
@@ -572,6 +594,47 @@
             This is only relevant if HW offloading is enabled (hw-offload).
             When this policy is enabled, it also requires 'tc-policy' to
             be set to 'skip_sw'.
+        </p>
+      </column>
+      <column name="other_config" key="pmd-auto-lb"
+              type='{"type": "boolean"}'>
+        <p>
+         Configures PMD Auto Load Balancing that allows automatic assignment of
+         RX queues to PMDs if any of PMDs is overloaded (i.e. processing cycles
+         > 95%).
+        </p>
+        <p>
+         It uses current scheme of cycle based assignment of RX queues that
+         are not statically pinned to PMDs.
+        </p>
+        <p>
+          The default value is <code>false</code>.
+        </p>
+        <p>
+          Set this value to <code>true</code> to enable this option. It is
+          currently disabled by default and an experimental feature.
+        </p>
+        <p>
+         This only comes in effect if cycle based assignment is enabled and
+         there are more than one non-isolated PMDs present and at least one of
+         it polls more than one queue.
+        </p>
+      </column>
+      <column name="other_config" key="pmd-auto-lb-rebal-interval"
+              type='{"type": "integer",
+                     "minInteger": 0, "maxInteger": 20000}'>
+        <p>
+         The minimum time (in minutes) 2 consecutive PMD Auto Load Balancing
+         iterations.
+        </p>
+        <p>
+         The defaul value is 1 min. If configured to 0 then it would be
+         converted to default value i.e. 1 min
+        </p>
+        <p>
+         This option can be configured to avoid frequent trigger of auto load
+         balancing of PMDs. For e.g. set the value (in min) such that it occurs
+         once in few hours or a day or a week.
         </p>
       </column>
     </group>
@@ -3060,6 +3123,25 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
       </column>
     </group>
 
+    <group title="EMC (Exact Match Cache) Configuration">
+      <p>
+        These settings controls behaviour of EMC lookups/insertions for packets
+        received from the interface.
+      </p>
+
+      <column name="other_config" key="emc-enable" type='{"type": "boolean"}'>
+        <p>
+          Specifies if Exact Match Cache (EMC) should be used while processing
+          packets received from this interface.
+          If true, <ref table="Open_vSwitch" column="other_config"
+          key="emc-insert-inv-prob"/> will have effect on this interface.
+        </p>
+        <p>
+          Defaults to true.
+        </p>
+      </column>
+    </group>
+
     <group title="MTU">
       <p>
         The MTU (maximum transmission unit) is the largest amount of data
@@ -5526,7 +5608,7 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         <p>
           With <em>flow-based sampling</em>, <code>sample</code> actions in the
           OpenFlow flow table drive IPFIX sampling.  See
-          <code>ovs-ofctl</code>(8) for a description of the
+          <code>ovs-actions</code>(7) for a description of the
           <code>sample</code> action.
         </p>
 

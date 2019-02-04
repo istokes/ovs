@@ -803,11 +803,14 @@ nat_clean(struct conntrack *ct, struct conn *conn,
     ct_lock_lock(&ctb->lock);
 }
 
+/* Must be called with 'CT_CONN_TYPE_DEFAULT' 'conn_type'. */
 static void
 conn_clean(struct conntrack *ct, struct conn *conn,
            struct conntrack_bucket *ctb)
     OVS_REQUIRES(ctb->lock)
 {
+    ovs_assert(conn->conn_type == CT_CONN_TYPE_DEFAULT);
+
     if (conn->alg) {
         expectation_clean(ct, &conn->key, ct->hash_basis);
     }
@@ -2172,7 +2175,9 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
 
     uint16_t port = first_port;
     bool all_ports_tried = false;
-    bool original_ports_tried = false;
+    /* For DNAT, we don't use ephemeral ports. */
+    bool ephemeral_ports_tried = conn->nat_info->nat_action & NAT_ACTION_DST
+                                 ? true : false;
     struct ct_addr first_addr = ct_addr;
 
     while (true) {
@@ -2218,9 +2223,10 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
                 ct_addr = conn->nat_info->min_addr;
             }
             if (!memcmp(&ct_addr, &first_addr, sizeof ct_addr)) {
-                if (!original_ports_tried) {
-                    original_ports_tried = true;
+                if (!ephemeral_ports_tried) {
+                    ephemeral_ports_tried = true;
                     ct_addr = conn->nat_info->min_addr;
+                    first_addr = ct_addr;
                     min_port = MIN_NAT_EPHEMERAL_PORT;
                     max_port = MAX_NAT_EPHEMERAL_PORT;
                 } else {
@@ -2569,9 +2575,10 @@ conntrack_flush_tuple(struct conntrack *ct, const struct ct_dpif_tuple *tuple,
 
     ct_lock_lock(&ct->buckets[bucket].lock);
     conn_key_lookup(&ct->buckets[bucket], &ctx, time_msec());
-    if (ctx.conn) {
+    if (ctx.conn && ctx.conn->conn_type == CT_CONN_TYPE_DEFAULT) {
         conn_clean(ct, ctx.conn, &ct->buckets[bucket]);
     } else {
+        VLOG_WARN("Must flush tuple using the original pre-NATed tuple");
         error = ENOENT;
     }
     ct_lock_unlock(&ct->buckets[bucket].lock);
@@ -2706,21 +2713,29 @@ expectation_create(struct conntrack *ct, ovs_be16 dst_port,
     if (reply) {
         src_addr = master_conn->key.src.addr;
         dst_addr = master_conn->key.dst.addr;
+        alg_exp_node->nat_rpl_dst = true;
         if (skip_nat) {
             alg_nat_repl_addr = dst_addr;
+        } else if (master_conn->nat_info &&
+                   master_conn->nat_info->nat_action & NAT_ACTION_DST) {
+            alg_nat_repl_addr = master_conn->rev_key.src.addr;
+            alg_exp_node->nat_rpl_dst = false;
         } else {
             alg_nat_repl_addr = master_conn->rev_key.dst.addr;
         }
-        alg_exp_node->nat_rpl_dst = true;
     } else {
         src_addr = master_conn->rev_key.src.addr;
         dst_addr = master_conn->rev_key.dst.addr;
+        alg_exp_node->nat_rpl_dst = false;
         if (skip_nat) {
             alg_nat_repl_addr = src_addr;
+        } else if (master_conn->nat_info &&
+                   master_conn->nat_info->nat_action & NAT_ACTION_DST) {
+            alg_nat_repl_addr = master_conn->key.dst.addr;
+            alg_exp_node->nat_rpl_dst = true;
         } else {
             alg_nat_repl_addr = master_conn->key.src.addr;
         }
-        alg_exp_node->nat_rpl_dst = false;
     }
     if (src_ip_wc) {
         memset(&src_addr, 0, sizeof src_addr);
@@ -3161,43 +3176,42 @@ repl_ftp_v6_addr(struct dp_packet *pkt, struct ct_addr v6_addr_rep,
     return overall_delta;
 }
 
+/* Increment/decrement a TCP sequence number. */
+static void
+adj_seqnum(ovs_16aligned_be32 *val, int32_t inc)
+{
+    put_16aligned_be32(val, htonl(ntohl(get_16aligned_be32(val)) + inc));
+}
+
 static void
 handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
-               struct dp_packet *pkt,
-               const struct conn *conn_for_expectation,
-               long long now, enum ftp_ctl_pkt ftp_ctl, bool nat)
+               struct dp_packet *pkt, const struct conn *ec, long long now,
+               enum ftp_ctl_pkt ftp_ctl, bool nat)
 {
     struct ip_header *l3_hdr = dp_packet_l3(pkt);
     ovs_be32 v4_addr_rep = 0;
     struct ct_addr v6_addr_rep;
-    size_t addr_offset_from_ftp_data_start;
+    size_t addr_offset_from_ftp_data_start = 0;
     size_t addr_size = 0;
     char *ftp_data_start;
-    bool do_seq_skew_adj = true;
     enum ct_alg_mode mode = CT_FTP_MODE_ACTIVE;
 
     if (detect_ftp_ctl_type(ctx, pkt) != ftp_ctl) {
         return;
     }
 
-    if (!nat || !conn_for_expectation->seq_skew) {
-        do_seq_skew_adj = false;
-    }
-
     struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
     int64_t seq_skew = 0;
 
-    if (ftp_ctl == CT_FTP_CTL_OTHER) {
-        seq_skew = conn_for_expectation->seq_skew;
-    } else if (ftp_ctl == CT_FTP_CTL_INTEREST) {
+    if (ftp_ctl == CT_FTP_CTL_INTEREST) {
         enum ftp_ctl_pkt rc;
         if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-            rc = process_ftp_ctl_v6(ct, pkt, conn_for_expectation,
+            rc = process_ftp_ctl_v6(ct, pkt, ec,
                                     &v6_addr_rep, &ftp_data_start,
                                     &addr_offset_from_ftp_data_start,
                                     &addr_size, &mode);
         } else {
-            rc = process_ftp_ctl_v4(ct, pkt, conn_for_expectation,
+            rc = process_ftp_ctl_v4(ct, pkt, ec,
                                     &v4_addr_rep, &ftp_data_start,
                                     &addr_offset_from_ftp_data_start);
         }
@@ -3210,66 +3224,42 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
             uint16_t ip_len;
 
             if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-                seq_skew = repl_ftp_v6_addr(pkt, v6_addr_rep, ftp_data_start,
-                                            addr_offset_from_ftp_data_start,
-                                            addr_size, mode);
+                if (nat) {
+                    seq_skew = repl_ftp_v6_addr(pkt, v6_addr_rep,
+                                   ftp_data_start,
+                                   addr_offset_from_ftp_data_start,
+                                   addr_size, mode);
+                }
+
                 if (seq_skew) {
-                    ip_len = ntohs(nh6->ip6_ctlun.ip6_un1.ip6_un1_plen);
-                    ip_len += seq_skew;
+                    ip_len = ntohs(nh6->ip6_ctlun.ip6_un1.ip6_un1_plen) +
+                        seq_skew;
                     nh6->ip6_ctlun.ip6_un1.ip6_un1_plen = htons(ip_len);
-                    conn_seq_skew_set(ct, &conn_for_expectation->key, now,
-                                      seq_skew, ctx->reply);
                 }
             } else {
-                seq_skew = repl_ftp_v4_addr(pkt, v4_addr_rep, ftp_data_start,
-                                            addr_offset_from_ftp_data_start);
-                ip_len = ntohs(l3_hdr->ip_tot_len);
+                if (nat) {
+                    seq_skew = repl_ftp_v4_addr(pkt, v4_addr_rep,
+                                   ftp_data_start,
+                                   addr_offset_from_ftp_data_start);
+                }
                 if (seq_skew) {
-                    ip_len += seq_skew;
+                    ip_len = ntohs(l3_hdr->ip_tot_len) + seq_skew;
                     l3_hdr->ip_csum = recalc_csum16(l3_hdr->ip_csum,
                                           l3_hdr->ip_tot_len, htons(ip_len));
                     l3_hdr->ip_tot_len = htons(ip_len);
-                    conn_seq_skew_set(ct, &conn_for_expectation->key, now,
-                                      seq_skew, ctx->reply);
                 }
             }
         } else {
             OVS_NOT_REACHED();
         }
-    } else {
-        OVS_NOT_REACHED();
     }
 
     struct tcp_header *th = dp_packet_l4(pkt);
 
-    if (do_seq_skew_adj && seq_skew != 0) {
-        if (ctx->reply != conn_for_expectation->seq_skew_dir) {
-
-            uint32_t tcp_ack = ntohl(get_16aligned_be32(&th->tcp_ack));
-
-            if ((seq_skew > 0) && (tcp_ack < seq_skew)) {
-                /* Should not be possible; will be marked invalid. */
-                tcp_ack = 0;
-            } else if ((seq_skew < 0) && (UINT32_MAX - tcp_ack < -seq_skew)) {
-                tcp_ack = (-seq_skew) - (UINT32_MAX - tcp_ack);
-            } else {
-                tcp_ack -= seq_skew;
-            }
-            ovs_be32 new_tcp_ack = htonl(tcp_ack);
-            put_16aligned_be32(&th->tcp_ack, new_tcp_ack);
-        } else {
-            uint32_t tcp_seq = ntohl(get_16aligned_be32(&th->tcp_seq));
-            if ((seq_skew > 0) && (UINT32_MAX - tcp_seq < seq_skew)) {
-                tcp_seq = seq_skew - (UINT32_MAX - tcp_seq);
-            } else if ((seq_skew < 0) && (tcp_seq < -seq_skew)) {
-                /* Should not be possible; will be marked invalid. */
-                tcp_seq = 0;
-            } else {
-                tcp_seq += seq_skew;
-            }
-            ovs_be32 new_tcp_seq = htonl(tcp_seq);
-            put_16aligned_be32(&th->tcp_seq, new_tcp_seq);
-        }
+    if (nat && ec->seq_skew != 0) {
+        ctx->reply != ec->seq_skew_dir ?
+            adj_seqnum(&th->tcp_ack, -ec->seq_skew) :
+            adj_seqnum(&th->tcp_seq, ec->seq_skew);
     }
 
     th->tcp_csum = 0;
@@ -3283,6 +3273,11 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     uint8_t pad = dp_packet_l2_pad_size(pkt);
     th->tcp_csum = csum_finish(
         csum_continue(tcp_csum, th, tail - (char *) th - pad));
+
+    if (seq_skew) {
+        conn_seq_skew_set(ct, &ec->key, now, seq_skew + ec->seq_skew,
+                          ctx->reply);
+    }
 }
 
 static void

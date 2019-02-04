@@ -3662,10 +3662,11 @@ port_add(struct ofproto *ofproto_, struct netdev *netdev)
     }
 
     dp_port_name = netdev_vport_get_dpif_port(netdev, namebuf, sizeof namebuf);
+    if (!dpif_port_exists(ofproto->backer->dpif, dp_port_name)) {
+        odp_port_t port_no = ODPP_NONE;
+        int error;
 
-    odp_port_t port_no = ODPP_NONE;
-    int error = dpif_port_add(ofproto->backer->dpif, netdev, &port_no);
-    if (error != EEXIST && error != EBUSY) {
+        error = dpif_port_add(ofproto->backer->dpif, netdev, &port_no);
         if (error) {
             return error;
         }
@@ -6029,6 +6030,7 @@ const struct ofproto_class ofproto_dpif_class = {
     type_get_memory_usage,
     flush,
     query_tables,
+    NULL,                       /* modify_tables */
     set_tables_version,
     port_alloc,
     port_construct,

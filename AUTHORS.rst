@@ -47,6 +47,7 @@ Amit Bose                          bose@noironetworks.com
 Amitabha Biswas                    azbiswas@gmail.com
 Anand Kumar                        kumaranand@vmware.com
 Andrea Kao                         eirinikos@gmail.com
+Andreas Karis                      akaris@redhat.com
 Andrew Evans
 Andrew Beekhof                     abeekhof@redhat.com
 Andrew Kampjes                     a.kampjes@gmail.com
@@ -212,6 +213,8 @@ Lars Kellogg-Stedman               lars@redhat.com
 Lei Huang                          huang.f.lei@gmail.com
 Leif Madsen                        lmadsen@redhat.com
 Leo Alterman
+Li RongQing                        lirongqing@baidu.com
+Lian-min Wang                      liang-min.wang@intel.com
 Lilijun                            jerry.lilijun@huawei.com
 Lili Huang                         huanglili.huang@huawei.com
 Linda Sun                          lsun@vmware.com
@@ -381,9 +384,10 @@ Zongkai LI                         zealokii@gmail.com
 Zhi Yong Wu                        zwu.kernel@gmail.com
 Zang MingJie                       zealot0630@gmail.com
 Zhenyu Gao                         sysugaozhenyu@gmail.com
-ZhiPeng Lu                         lu.zhipeng@zte.com.cn
+ZhiPeng Lu                         luzhipeng@uniudc.com
 Zhou Yangchao                      1028519445@qq.com
 aginwala                           amginwal@gmail.com
+solomon                            liwei.solomon@gmail.com
 wenxu                              wenxu@ucloud.cn
 wisd0me                            ak47izatool@gmail.com
 xushengping                        shengping.xu@huawei.com
@@ -582,6 +586,7 @@ Scott Hendricks
 Sean Brady                      sbrady@gtfservices.com
 Sebastian Andrzej Siewior       sebastian@breakpoint.cc
 Sébastien RICCIO                sr@swisscenter.com
+Shweta Seth                     shwseth@cisco.com
 Simon Jouet                     simon.jouet@gmail.com
 Spiro Kourtessis                spiro@vmware.com
 Sridhar Samudrala               samudrala.sridhar@gmail.com
@@ -624,6 +629,7 @@ likunyun                        kunyunli@hotmail.com
 meishengxin                     meishengxin@huawei.com
 neeraj mehta                    mehtaneeraj07@gmail.com
 rahim entezari                  rahim.entezari@gmail.com
+shaoke xi                       xishaoke.xsk@gmail.com
 shivani dommeti                 shivani.dommeti@gmail.com
 weizj                           34965317@qq.com
 俊 赵                           zhaojun12@outlook.com

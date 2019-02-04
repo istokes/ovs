@@ -52,7 +52,7 @@ struct netlink_field {
     int size;
 };
 
-static struct netlink_field set_flower_map[][3] = {
+static struct netlink_field set_flower_map[][4] = {
     [OVS_KEY_ATTR_IPV4] = {
         { offsetof(struct ovs_key_ipv4, ipv4_src),
           offsetof(struct tc_flower_key, ipv4.ipv4_src),
@@ -66,6 +66,10 @@ static struct netlink_field set_flower_map[][3] = {
           offsetof(struct tc_flower_key, ipv4.rewrite_ttl),
           MEMBER_SIZEOF(struct tc_flower_key, ipv4.rewrite_ttl)
         },
+        { offsetof(struct ovs_key_ipv4, ipv4_tos),
+          offsetof(struct tc_flower_key, ipv4.rewrite_tos),
+          MEMBER_SIZEOF(struct tc_flower_key, ipv4.rewrite_tos)
+        },
     },
     [OVS_KEY_ATTR_IPV6] = {
         { offsetof(struct ovs_key_ipv6, ipv6_src),
@@ -75,6 +79,14 @@ static struct netlink_field set_flower_map[][3] = {
         { offsetof(struct ovs_key_ipv6, ipv6_dst),
           offsetof(struct tc_flower_key, ipv6.ipv6_dst),
           MEMBER_SIZEOF(struct tc_flower_key, ipv6.ipv6_dst)
+        },
+        { offsetof(struct ovs_key_ipv6, ipv6_hlimit),
+          offsetof(struct tc_flower_key, ipv6.rewrite_hlimit),
+          MEMBER_SIZEOF(struct tc_flower_key, ipv6.rewrite_hlimit)
+        },
+        { offsetof(struct ovs_key_ipv6, ipv6_tclass),
+          offsetof(struct tc_flower_key, ipv6.rewrite_tclass),
+          MEMBER_SIZEOF(struct tc_flower_key, ipv6.rewrite_tclass)
         },
     },
     [OVS_KEY_ATTR_ETHERNET] = {
@@ -651,8 +663,10 @@ parse_tc_flower_to_match(struct tc_flower *flower,
                     nl_msg_put_u8(buf, OVS_TUNNEL_KEY_ATTR_TTL,
                                   action->encap.ttl);
                 }
-                nl_msg_put_be16(buf, OVS_TUNNEL_KEY_ATTR_TP_DST,
-                                action->encap.tp_dst);
+                if (action->encap.tp_dst) {
+                    nl_msg_put_be16(buf, OVS_TUNNEL_KEY_ATTR_TP_DST,
+                                    action->encap.tp_dst);
+                }
                 if (!action->encap.no_csum) {
                     nl_msg_put_u8(buf, OVS_TUNNEL_KEY_ATTR_CSUM,
                                   !action->encap.no_csum);

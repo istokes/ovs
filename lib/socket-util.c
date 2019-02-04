@@ -285,7 +285,7 @@ check_connection_completion(int fd)
     }
 #endif
     if (retval == 1) {
-        if (pfd.revents & POLLERR) {
+        if (pfd.revents & (POLLERR | POLLHUP)) {
             ssize_t n = send(fd, "", 1, 0);
             if (n < 0) {
                 return sock_errno();
@@ -1241,7 +1241,7 @@ sock_strerror(int error)
 #endif
 }
 
-#ifndef _WIN32 //Avoid using sendmsg on Windows entirely
+#ifndef _WIN32 /* Avoid using sendmsg on Windows entirely. */
 static int
 emulate_sendmmsg(int fd, struct mmsghdr *msgs, unsigned int n,
                  unsigned int flags)
