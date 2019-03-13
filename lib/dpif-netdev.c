@@ -189,6 +189,10 @@ struct netdev_flow_key {
 #define DEFAULT_EM_FLOW_INSERT_MIN (UINT32_MAX /                     \
                                     DEFAULT_EM_FLOW_INSERT_INV_PROB)
 
+/* DEFAULT_EMC_PREFETCH_SIZE can cover majority traffic including TCP/UDP
+ * protocol. */
+#define DEFAULT_EMC_PREFETCH_SIZE ROUND_UP(128,CACHE_LINE_SIZE)
+
 struct emc_entry {
     struct dp_netdev_flow *flow;
     struct netdev_flow_key key;   /* key.hash used for emc hash value. */
@@ -6166,15 +6170,20 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
 }
 
 static inline uint32_t
-dpif_netdev_packet_get_rss_hash_orig_pkt(struct dp_packet *packet,
-                                const struct miniflow *mf)
+dpif_netdev_packet_get_packet_rss_hash(struct dp_packet *packet,
+                                bool md_is_valid)
 {
-    uint32_t hash;
+    uint32_t hash,recirc_depth;
 
-    if (OVS_LIKELY(dp_packet_rss_valid(packet))) {
-        hash = dp_packet_get_rss_hash(packet);
-    } else {
-        hash = miniflow_hash_5tuple(mf, 0);
+    hash = dp_packet_get_rss_hash(packet);
+
+    if (md_is_valid) {
+        /* The RSS hash must account for the recirculation depth to avoid
+         * collisions in the exact match cache */
+        recirc_depth = *recirc_depth_get_unsafe();
+        if (OVS_UNLIKELY(recirc_depth)) {
+            hash = hash_finish(hash, recirc_depth);
+        }
         dp_packet_set_rss_hash(packet, hash);
     }
 
@@ -6182,24 +6191,23 @@ dpif_netdev_packet_get_rss_hash_orig_pkt(struct dp_packet *packet,
 }
 
 static inline uint32_t
-dpif_netdev_packet_get_rss_hash(struct dp_packet *packet,
-                                const struct miniflow *mf)
+dpif_netdev_packet_get_hash_5tuple(struct dp_packet *packet,
+                                const struct miniflow *mf,
+                                bool md_is_valid)
 {
-    uint32_t hash, recirc_depth;
+    uint32_t hash,recirc_depth;
 
-    if (OVS_LIKELY(dp_packet_rss_valid(packet))) {
-        hash = dp_packet_get_rss_hash(packet);
-    } else {
-        hash = miniflow_hash_5tuple(mf, 0);
-        dp_packet_set_rss_hash(packet, hash);
-    }
+    hash = miniflow_hash_5tuple(mf, 0);
+    dp_packet_set_rss_hash(packet, hash);
 
-    /* The RSS hash must account for the recirculation depth to avoid
-     * collisions in the exact match cache */
-    recirc_depth = *recirc_depth_get_unsafe();
-    if (OVS_UNLIKELY(recirc_depth)) {
-        hash = hash_finish(hash, recirc_depth);
-        dp_packet_set_rss_hash(packet, hash);
+    if (md_is_valid) {
+        /* The RSS hash must account for the recirculation depth to avoid
+         * collisions in the exact match cache */
+        recirc_depth = *recirc_depth_get_unsafe();
+        if (OVS_UNLIKELY(recirc_depth)) {
+            hash = hash_finish(hash, recirc_depth);
+            dp_packet_set_rss_hash(packet, hash);
+        }
     }
     return hash;
 }
@@ -6390,6 +6398,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     bool smc_enable_db;
     size_t map_cnt = 0;
     bool batch_enable = true;
+    bool is_5tuple_hash_needed;
 
     atomic_read_relaxed(&pmd->dp->smc_enable_db, &smc_enable_db);
     pmd_perf_update_counter(&pmd->perf_stats,
@@ -6436,16 +6445,31 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
-        miniflow_extract(packet, &key->mf);
-        key->len = 0; /* Not computed yet. */
         /* If EMC and SMC disabled skip hash computation */
         if (smc_enable_db == true || cur_min != 0) {
-            if (!md_is_valid) {
-                key->hash = dpif_netdev_packet_get_rss_hash_orig_pkt(packet,
-                        &key->mf);
+            if (OVS_LIKELY(dp_packet_rss_valid(packet))) {
+                is_5tuple_hash_needed = false;
+                key->hash =
+                   dpif_netdev_packet_get_packet_rss_hash(packet,md_is_valid);
+                if (cur_min) {
+                    ovs_prefetch_range(
+                      &cache->emc_cache.entries[key->hash & EM_FLOW_HASH_MASK],
+                      DEFAULT_EMC_PREFETCH_SIZE);
+                }
             } else {
-                key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
+                is_5tuple_hash_needed = true;
             }
+        } else {
+            is_5tuple_hash_needed = false;
+        }
+
+        miniflow_extract(packet, &key->mf);
+        key->len = 0; /* Not computed yet. */
+
+        /* If 5tuple hash is needed */
+        if (is_5tuple_hash_needed) {
+            key->hash = dpif_netdev_packet_get_hash_5tuple(packet, &key->mf,
+                                                           md_is_valid);
         }
         if (cur_min) {
             flow = emc_lookup(&cache->emc_cache, key);
