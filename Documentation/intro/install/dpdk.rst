@@ -64,9 +64,9 @@ Install DPDK
 #. Download the `DPDK sources`_, extract the file and set ``DPDK_DIR``::
 
        $ cd /usr/src/
-       $ wget http://fast.dpdk.org/rel/dpdk-16.11.8.tar.xz
-       $ tar xf dpdk-16.11.8.tar.xz
-       $ export DPDK_DIR=/usr/src/dpdk-stable-16.11.8
+       $ wget http://fast.dpdk.org/rel/dpdk-16.11.9.tar.xz
+       $ tar xf dpdk-16.11.9.tar.xz
+       $ export DPDK_DIR=/usr/src/dpdk-stable-16.11.9
        $ cd $DPDK_DIR
 
 #. (Optional) Configure DPDK as a shared library
@@ -75,7 +75,7 @@ Install DPDK
    default, it is configured for the former. If you wish to use the latter, set
    ``CONFIG_RTE_BUILD_SHARED_LIB=y`` in ``$DPDK_DIR/config/common_base``.
 
-   .. note::
+   .. note
 
       Minor performance loss is expected when using OVS with a shared DPDK
       library compared to a static DPDK library.
