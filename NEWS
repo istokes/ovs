@@ -1,7 +1,8 @@
 v2.11.2 - xx xxx xxxx
 --------------------
    - DPDK
-     * OVS validated with DPDK 18.11.1 which is recommended to be used.
+     * DPDK 18.11.2 is the new minimal supported version.
+     * DPDK 18.11.1 and lower is no longer supported.
 
 v2.11.1 - 30 Mar 2019
 --------------------
