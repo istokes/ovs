@@ -22,6 +22,10 @@
 #include "ofproto-provider.h"
 #include "packets.h"
 
+/* Bit-mask for hashing a flow down to a bucket. */
+#define BOND_MASK 0xff
+#define BOND_BUCKETS (BOND_MASK + 1)
+
 struct flow;
 struct netdev;
 struct ofpbuf;
@@ -58,6 +62,8 @@ struct bond_settings {
                                 /* The MAC address of the interface
                                    that was active during the last
                                    ovs run. */
+    bool use_bond_cache;        /* Use bond cache. Only applicable for
+                                   bond mode BALANCE TCP. */
 };
 
 /* Program startup. */
@@ -122,4 +128,7 @@ void bond_rebalance(struct bond *);
 */
 void bond_update_post_recirc_rules(struct bond *, uint32_t *recirc_id,
                                    uint32_t *hash_basis);
+
+bool bond_get_cache_mode(const struct bond *);
+
 #endif /* bond.h */

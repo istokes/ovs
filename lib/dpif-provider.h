@@ -552,6 +552,11 @@ struct dpif_class {
      * zero. */
     int (*meter_del)(struct dpif *, ofproto_meter_id meter_id,
                      struct ofputil_meter_stats *, uint16_t n_bands);
+
+    /* Adds a bond with 'bond_id' and the slave-map to 'dpif' */
+    int (*bond_add)(struct dpif *dpif, uint32_t bond_id, uint32_t slave_map[]);
+    /* Removes bond identified by 'bond_id' from 'dpif' */
+    int (*bond_del)(struct dpif *dpif, uint32_t bond_id);
 };
 
 extern const struct dpif_class dpif_netlink_class;

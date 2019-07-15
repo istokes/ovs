@@ -734,6 +734,7 @@ enum ovs_hash_alg {
 	OVS_HASH_ALG_L4,
 #ifndef __KERNEL__
 	OVS_HASH_ALG_SYM_L4,
+        OVS_HASH_ALG_L4_RSS,
 #endif
 	__OVS_HASH_MAX
 };
@@ -989,6 +990,7 @@ enum ovs_action_attr {
 #ifndef __KERNEL__
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
+	OVS_ACTION_ATTR_LB_OUTPUT,     /* bond-id */
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */

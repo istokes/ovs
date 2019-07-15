@@ -1441,6 +1441,8 @@ check_support(struct dpif_backer *backer)
     backer->rt_support.ct_clear = check_ct_clear(backer);
     backer->rt_support.max_hash_alg = check_max_dp_hash_alg(backer);
     backer->rt_support.check_pkt_len = check_check_pkt_len(backer);
+    backer->rt_support.balance_tcp_opt =
+        dpif_supports_balance_tcp_opt(backer->dpif);
 
     /* Flow fields. */
     backer->rt_support.odp.ct_state = check_ct_state(backer);
@@ -3292,6 +3294,35 @@ bundle_remove(struct ofport *port_)
             bundle->bond = NULL;
         }
     }
+}
+
+int
+ofproto_dpif_bundle_add(struct ofproto_dpif *dpif,
+                        uint32_t bond_id,
+                        uint32_t slave_map[])
+{
+    int error;
+    uint32_t bucket;
+
+    /* Convert ofp_port to odp_port */
+    for (bucket = 0; bucket < BOND_BUCKETS; bucket++) {
+        if (slave_map[bucket] != -1) {
+            slave_map[bucket] = ofp_port_to_odp_port(dpif, slave_map[bucket]);
+        }
+    }
+
+    error = dpif_bond_add(dpif->backer->dpif, bond_id, slave_map);
+    return error;
+}
+
+int
+ofproto_dpif_bundle_del(struct ofproto_dpif *dpif,
+                        uint32_t bond_id)
+{
+    int error;
+
+    error = dpif_bond_del(dpif->backer->dpif, bond_id);
+    return error;
 }
 
 static void

@@ -4300,6 +4300,10 @@ port_configure_bond(struct port *port, struct bond_settings *s)
         /* OVSDB did not store the last active interface */
         s->active_slave_mac = eth_addr_zero;
     }
+    if (s->balance == BM_TCP) {
+        s->use_bond_cache = smap_get_bool(&port->cfg->other_config,
+                                        "opt-bond-tcp", false);
+    }
 }
 
 /* Returns true if 'port' is synthetic, that is, if we constructed it locally

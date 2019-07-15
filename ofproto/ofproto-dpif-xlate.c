@@ -409,6 +409,8 @@ struct xlate_ctx {
     struct ofpbuf action_set;   /* Action set. */
 
     enum xlate_error error;     /* Translation failed. */
+
+    bool tnl_push_no_recirc;    /* Tunnel push recirculation status */
 };
 
 /* Structure to track VLAN manipulation */
@@ -2418,6 +2420,34 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
                 /* Use recirculation instead of output. */
                 use_recirc = true;
                 xr.hash_alg = OVS_HASH_ALG_L4;
+
+                if (bond_get_cache_mode(out_xbundle->bond)) {
+                    /*
+                     * Select the hash-alg based on datapath's capability.
+                     * If not supported, default to OVS_HASH_ALG_L4 for
+                     * which HASH + RECIRC actions would be set in xlate. Else
+                     * use the RSS hash for better throughput. With
+                     * OVS_HASH_ALG_L4_RSS, RECIRC action is also avoided.
+                     *
+                     * NOTE:
+                     * Do not use load-balanced-output action when tunnel push
+                     * recirculation is avoided (via CLONE action), as L4 hash
+                     * for bond balancing needs to be computed post tunnel
+                     * encapsulation.
+                     */
+                    if (ctx->xbridge->support.balance_tcp_opt &&
+                        !ctx->tnl_push_no_recirc) {
+                        xr.hash_alg = OVS_HASH_ALG_L4_RSS;
+                    }
+
+                    VLOG_DBG("xin-in_port: %u/%u base-flow-in_port: %u/%u "
+                             "hash-algo = %d\n",
+                             ctx->xin->flow.in_port.ofp_port,
+                             ctx->xin->flow.in_port.odp_port,
+                             ctx->base_flow.in_port.ofp_port,
+                             ctx->base_flow.in_port.odp_port, xr.hash_alg);
+                }
+
                 /* Recirculation does not require unmasking hash fields. */
                 wc = NULL;
             }
@@ -3694,12 +3724,16 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
         ctx->xin->allow_side_effects = backup_side_effects;
         ctx->xin->packet = backup_packet;
         ctx->wc = backup_wc;
+
+        ctx->tnl_push_no_recirc = true;
     } else {
         /* In order to maintain accurate stats, use recirc for
          * natvie tunneling.  */
         nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_RECIRC, 0);
         nl_msg_end_nested(ctx->odp_actions, clone_ofs);
-    }
+
+        ctx->tnl_push_no_recirc = false;
+   }
 
     /* Restore the flows after the translation. */
     memcpy(&ctx->xin->flow, &old_flow, sizeof ctx->xin->flow);
@@ -4125,24 +4159,36 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         xlate_commit_actions(ctx);
 
         if (xr) {
-            /* Recirculate the packet. */
             struct ovs_action_hash *act_hash;
 
             /* Hash action. */
             enum ovs_hash_alg hash_alg = xr->hash_alg;
-            if (hash_alg > ctx->xbridge->support.max_hash_alg) {
+            if (hash_alg > ctx->xbridge->support.max_hash_alg ||
+                hash_alg == OVS_HASH_ALG_L4_RSS) {
                 /* Algorithm supported by all datapaths. */
                 hash_alg = OVS_HASH_ALG_L4;
             }
             act_hash = nl_msg_put_unspec_uninit(ctx->odp_actions,
-                                                OVS_ACTION_ATTR_HASH,
-                                                sizeof *act_hash);
+                                            OVS_ACTION_ATTR_HASH,
+                                            sizeof *act_hash);
             act_hash->hash_alg = hash_alg;
             act_hash->hash_basis = xr->hash_basis;
 
-            /* Recirc action. */
-            nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_RECIRC,
-                           xr->recirc_id);
+            if (xr->hash_alg == OVS_HASH_ALG_L4_RSS) {
+                /*
+                 * If hash algorithm is RSS, use the hash directly
+                 * for slave selection and avoid recirculation.
+                 *
+                 * Currently support for netdev datapath only.
+                 */
+                nl_msg_put_odp_port(ctx->odp_actions,
+                                    OVS_ACTION_ATTR_LB_OUTPUT,
+                                    xr->recirc_id);
+            } else {
+                /* Recirculate the packet. */
+                nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_RECIRC,
+                               xr->recirc_id);
+            }
         } else if (is_native_tunnel) {
             /* Output to native tunnel port. */
             native_tunnel_output(ctx, xport, flow, odp_port, truncate);
@@ -7167,7 +7213,8 @@ count_output_actions(const struct ofpbuf *odp_actions)
     int n = 0;
 
     NL_ATTR_FOR_EACH_UNSAFE (a, left, odp_actions->data, odp_actions->size) {
-        if (a->nla_type == OVS_ACTION_ATTR_OUTPUT) {
+        if ((a->nla_type == OVS_ACTION_ATTR_OUTPUT) ||
+            (a->nla_type == OVS_ACTION_ATTR_LB_OUTPUT)) {
             n++;
         }
     }

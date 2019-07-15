@@ -1963,6 +1963,16 @@
         <code>active-backup</code>.
       </column>
 
+      <column name="other_config" key="opt-bond-tcp"
+              type='{"type": "boolean"}'>
+        Enable/disable usage of RSS hash from the ingress port for load
+        balancing flows among output slaves in load balanced bonds in
+        <code>balance-tcp</code>. When enabled, it uses optimized path for
+        balance-tcp mode by using rss hash and avoids recirculation.
+        It affects only new flows, i.e, existing flows remain unchanged.
+        This knob does not affect other balancing modes.
+      </column>
+
       <group title="Link Failure Detection">
         <p>
           An important part of link bonding is detecting that links are down so

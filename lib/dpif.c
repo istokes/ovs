@@ -1177,6 +1177,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
 
     case OVS_ACTION_ATTR_CT:
     case OVS_ACTION_ATTR_OUTPUT:
+    case OVS_ACTION_ATTR_LB_OUTPUT:
     case OVS_ACTION_ATTR_TUNNEL_PUSH:
     case OVS_ACTION_ATTR_TUNNEL_POP:
     case OVS_ACTION_ATTR_USERSPACE:
@@ -1227,6 +1228,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
         struct dp_packet *clone = NULL;
         uint32_t cutlen = dp_packet_get_cutlen(packet);
         if (cutlen && (type == OVS_ACTION_ATTR_OUTPUT
+                        || type == OVS_ACTION_ATTR_LB_OUTPUT
                         || type == OVS_ACTION_ATTR_TUNNEL_PUSH
                         || type == OVS_ACTION_ATTR_TUNNEL_POP
                         || type == OVS_ACTION_ATTR_USERSPACE)) {
@@ -1879,6 +1881,16 @@ dpif_supports_tnl_push_pop(const struct dpif *dpif)
     return dpif_is_netdev(dpif);
 }
 
+bool
+dpif_supports_balance_tcp_opt(const struct dpif *dpif)
+{
+    /*
+     * Balance-tcp optimization is currently supported in netdev
+     * datapath only.
+     */
+    return dpif_is_netdev(dpif);
+}
+
 /* Meters */
 void
 dpif_meter_get_features(const struct dpif *dpif,
@@ -1974,5 +1986,29 @@ dpif_meter_del(struct dpif *dpif, ofproto_meter_id meter_id,
             stats->n_bands = 0;
         }
     }
+    return error;
+}
+
+int
+dpif_bond_add(struct dpif *dpif, uint32_t bond_id, uint32_t slave_map[])
+{
+    int error = 0;
+
+    if (dpif && dpif->dpif_class && dpif->dpif_class->bond_add) {
+        error = dpif->dpif_class->bond_add(dpif, bond_id, slave_map);
+    }
+
+    return error;
+}
+
+int
+dpif_bond_del(struct dpif *dpif, uint32_t bond_id)
+{
+    int error = 0;
+
+    if (dpif && dpif->dpif_class && dpif->dpif_class->bond_del) {
+        error = dpif->dpif_class->bond_del(dpif, bond_id);
+    }
+
     return error;
 }

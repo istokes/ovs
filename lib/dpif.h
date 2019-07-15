@@ -891,6 +891,11 @@ int dpif_get_pmds_for_port(const struct dpif * dpif, odp_port_t port_no,
 char *dpif_get_dp_version(const struct dpif *);
 bool dpif_supports_tnl_push_pop(const struct dpif *);
 
+bool dpif_supports_balance_tcp_opt(const struct dpif *);
+
+int dpif_bond_add(struct dpif *dpif, uint32_t bond_id, uint32_t slave_map[]);
+int dpif_bond_del(struct dpif *dpif, uint32_t bond_id);
+
 /* Log functions. */
 struct vlog_module;
 

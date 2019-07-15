@@ -118,6 +118,7 @@ odp_action_len(uint16_t type)
 
     switch ((enum ovs_action_attr) type) {
     case OVS_ACTION_ATTR_OUTPUT: return sizeof(uint32_t);
+    case OVS_ACTION_ATTR_LB_OUTPUT: return sizeof(uint32_t);
     case OVS_ACTION_ATTR_TRUNC: return sizeof(struct ovs_action_trunc);
     case OVS_ACTION_ATTR_TUNNEL_PUSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_TUNNEL_POP: return sizeof(uint32_t);
@@ -1112,6 +1113,9 @@ format_odp_action(struct ds *ds, const struct nlattr *a,
         break;
     case OVS_ACTION_ATTR_OUTPUT:
         odp_portno_name_format(portno_names, nl_attr_get_odp_port(a), ds);
+        break;
+    case OVS_ACTION_ATTR_LB_OUTPUT:
+        ds_put_format(ds, "lb_output(bond,%"PRIu32")", nl_attr_get_u32(a));
         break;
     case OVS_ACTION_ATTR_TRUNC: {
         const struct ovs_action_trunc *trunc =
