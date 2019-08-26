@@ -447,8 +447,14 @@ struct netdev_dpdk {
 
     PADDED_MEMBERS(CACHE_LINE_SIZE,
         struct netdev_stats stats;
-        /* Custom stat for retries when unable to transmit. */
+        /* Counters for Custom device stats */
+        /* No. of retries when unable to transmit. */
         uint64_t tx_retries;
+        /* Pkts left untransmitted in Tx buffers. Probably Tx Que is full */
+        uint64_t tx_failure_drops;
+        uint64_t tx_mtu_exceeded_drops;
+        uint64_t tx_qos_drops;
+        uint64_t rx_qos_drops;
         /* Protects stats */
         rte_spinlock_t stats_lock;
         /* 4 pad bytes here. */
@@ -2205,6 +2211,7 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
     struct ingress_policer *policer = netdev_dpdk_get_ingress_policer(dev);
     uint16_t nb_rx = 0;
     uint16_t dropped = 0;
+    uint16_t qos_drops = 0;
     int qid = rxq->queue_id * VIRTIO_QNUM + VIRTIO_TXQ;
     int vid = netdev_dpdk_get_vid(dev);
 
@@ -2236,11 +2243,13 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
                                     (struct rte_mbuf **) batch->packets,
                                     nb_rx, true);
         dropped -= nb_rx;
+        qos_drops = dropped;
     }
 
     rte_spinlock_lock(&dev->stats_lock);
     netdev_dpdk_vhost_update_rx_counters(&dev->stats, batch->packets,
                                          nb_rx, dropped);
+    dev->rx_qos_drops += qos_drops;
     rte_spinlock_unlock(&dev->stats_lock);
 
     batch->count = nb_rx;
@@ -2266,6 +2275,7 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     struct ingress_policer *policer = netdev_dpdk_get_ingress_policer(dev);
     int nb_rx;
     int dropped = 0;
+    int qos_drops = 0;
 
     if (OVS_UNLIKELY(!(dev->flags & NETDEV_UP))) {
         return EAGAIN;
@@ -2284,12 +2294,14 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
                                     (struct rte_mbuf **) batch->packets,
                                     nb_rx, true);
         dropped -= nb_rx;
+        qos_drops = dropped;
     }
 
     /* Update stats to reflect dropped packets */
     if (OVS_UNLIKELY(dropped)) {
         rte_spinlock_lock(&dev->stats_lock);
         dev->stats.rx_dropped += dropped;
+        dev->rx_qos_drops += qos_drops;
         rte_spinlock_unlock(&dev->stats_lock);
     }
 
@@ -2373,6 +2385,9 @@ __netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     struct rte_mbuf **cur_pkts = (struct rte_mbuf **) pkts;
     unsigned int total_pkts = cnt;
     unsigned int dropped = 0;
+    unsigned int tx_failure;
+    unsigned int mtu_drops;
+    unsigned int qos_drops;
     int i, retries = 0;
     int max_retries = VHOST_ENQ_RETRY_MIN;
     int vid = netdev_dpdk_get_vid(dev);
@@ -2390,9 +2405,12 @@ __netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     rte_spinlock_lock(&dev->tx_q[qid].tx_lock);
 
     cnt = netdev_dpdk_filter_packet_len(dev, cur_pkts, cnt);
+    mtu_drops = total_pkts - cnt;
+    qos_drops = cnt;
     /* Check has QoS has been configured for the netdev */
     cnt = netdev_dpdk_qos_run(dev, cur_pkts, cnt, true);
-    dropped = total_pkts - cnt;
+    qos_drops -= cnt;
+    dropped = qos_drops + mtu_drops;
 
     do {
         int vhost_qid = qid * VIRTIO_QNUM + VIRTIO_RXQ;
@@ -2417,12 +2435,16 @@ __netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
         }
     } while (cnt && (retries++ < max_retries));
 
+    tx_failure = cnt;
     rte_spinlock_unlock(&dev->tx_q[qid].tx_lock);
 
     rte_spinlock_lock(&dev->stats_lock);
     netdev_dpdk_vhost_update_tx_counters(&dev->stats, pkts, total_pkts,
                                          cnt + dropped);
     dev->tx_retries += MIN(retries, max_retries);
+    dev->tx_failure_drops += tx_failure;
+    dev->tx_mtu_exceeded_drops += mtu_drops;
+    dev->tx_qos_drops += qos_drops;
     rte_spinlock_unlock(&dev->stats_lock);
 
 out:
@@ -2447,12 +2469,15 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
     struct rte_mbuf *pkts[PKT_ARRAY_SIZE];
     uint32_t cnt = batch_cnt;
     uint32_t dropped = 0;
+    uint32_t tx_failure = 0;
+    uint32_t mtu_drops = 0;
+    uint32_t qos_drops = 0;
 
     if (dev->type != DPDK_DEV_VHOST) {
         /* Check if QoS has been configured for this netdev. */
         cnt = netdev_dpdk_qos_run(dev, (struct rte_mbuf **) batch->packets,
                                   batch_cnt, false);
-        dropped += batch_cnt - cnt;
+        qos_drops = batch_cnt - cnt;
     }
 
     uint32_t txcnt = 0;
@@ -2465,13 +2490,13 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
             VLOG_WARN_RL(&rl, "Too big size %u max_packet_len %d",
                          size, dev->max_packet_len);
 
-            dropped++;
+            mtu_drops++;
             continue;
         }
 
         pkts[txcnt] = rte_pktmbuf_alloc(dev->dpdk_mp->mp);
         if (OVS_UNLIKELY(!pkts[txcnt])) {
-            dropped += cnt - i;
+            dropped = cnt - i;
             break;
         }
 
@@ -2488,13 +2513,17 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet_batch *batch)
             __netdev_dpdk_vhost_send(netdev, qid, (struct dp_packet **) pkts,
                                      txcnt);
         } else {
-            dropped += netdev_dpdk_eth_tx_burst(dev, qid, pkts, txcnt);
+            tx_failure = netdev_dpdk_eth_tx_burst(dev, qid, pkts, txcnt);
         }
     }
 
+    dropped += qos_drops + mtu_drops + tx_failure;
     if (OVS_UNLIKELY(dropped)) {
         rte_spinlock_lock(&dev->stats_lock);
         dev->stats.tx_dropped += dropped;
+        dev->tx_failure_drops += tx_failure;
+        dev->tx_mtu_exceeded_drops += mtu_drops;
+        dev->tx_qos_drops += qos_drops;
         rte_spinlock_unlock(&dev->stats_lock);
     }
 }
@@ -2536,18 +2565,25 @@ netdev_dpdk_send__(struct netdev_dpdk *dev, int qid,
         dp_packet_delete_batch(batch, true);
     } else {
         int tx_cnt, dropped;
+        int tx_failure, mtu_drops, qos_drops;
         int batch_cnt = dp_packet_batch_size(batch);
         struct rte_mbuf **pkts = (struct rte_mbuf **) batch->packets;
 
         tx_cnt = netdev_dpdk_filter_packet_len(dev, pkts, batch_cnt);
+        mtu_drops = batch_cnt - tx_cnt;
+        qos_drops = tx_cnt;
         tx_cnt = netdev_dpdk_qos_run(dev, pkts, tx_cnt, true);
-        dropped = batch_cnt - tx_cnt;
+        qos_drops -= tx_cnt;
 
-        dropped += netdev_dpdk_eth_tx_burst(dev, qid, pkts, tx_cnt);
+        tx_failure = netdev_dpdk_eth_tx_burst(dev, qid, pkts, tx_cnt);
 
+        dropped = tx_failure + mtu_drops + qos_drops;
         if (OVS_UNLIKELY(dropped)) {
             rte_spinlock_lock(&dev->stats_lock);
             dev->stats.tx_dropped += dropped;
+            dev->tx_failure_drops += tx_failure;
+            dev->tx_mtu_exceeded_drops += mtu_drops;
+            dev->tx_qos_drops += qos_drops;
             rte_spinlock_unlock(&dev->stats_lock);
         }
     }
@@ -2816,6 +2852,17 @@ netdev_dpdk_get_custom_stats(const struct netdev *netdev,
     uint32_t i;
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
     int rte_xstats_ret;
+    uint16_t index = 0;
+
+#define DPDK_CSTATS                         \
+    DPDK_CSTAT(tx_failure_drops)            \
+    DPDK_CSTAT(tx_mtu_exceeded_drops)       \
+    DPDK_CSTAT(tx_qos_drops)                \
+    DPDK_CSTAT(rx_qos_drops)
+
+#define DPDK_CSTAT(NAME) +1
+    custom_stats->size = DPDK_CSTATS;
+#undef DPDK_CSTAT
 
     ovs_mutex_lock(&dev->mutex);
 
@@ -2830,9 +2877,10 @@ netdev_dpdk_get_custom_stats(const struct netdev *netdev,
         if (rte_xstats_ret > 0 &&
             rte_xstats_ret <= dev->rte_xstats_ids_size) {
 
-            custom_stats->size = rte_xstats_ret;
+            index = rte_xstats_ret;
+            custom_stats->size += rte_xstats_ret;
             custom_stats->counters =
-                    (struct netdev_custom_counter *) xcalloc(rte_xstats_ret,
+                    (struct netdev_custom_counter *) xcalloc(custom_stats->size,
                             sizeof(struct netdev_custom_counter));
 
             for (i = 0; i < rte_xstats_ret; i++) {
@@ -2846,7 +2894,6 @@ netdev_dpdk_get_custom_stats(const struct netdev *netdev,
             VLOG_WARN("Cannot get XSTATS values for port: "DPDK_PORT_ID_FMT,
                       dev->port_id);
             custom_stats->counters = NULL;
-            custom_stats->size = 0;
             /* Let's clear statistics cache, so it will be
              * reconfigured */
             netdev_dpdk_clear_xstats(dev);
@@ -2854,6 +2901,27 @@ netdev_dpdk_get_custom_stats(const struct netdev *netdev,
 
         free(values);
     }
+
+    if (custom_stats->counters == NULL) {
+        custom_stats->counters =
+            (struct netdev_custom_counter *) xcalloc(custom_stats->size,
+                                  sizeof(struct netdev_custom_counter));
+    }
+
+    rte_spinlock_lock(&dev->stats_lock);
+    i = index;
+#define DPDK_CSTAT(NAME)                                     \
+    ovs_strlcpy(custom_stats->counters[i++].name, #NAME,     \
+                NETDEV_CUSTOM_STATS_NAME_SIZE);
+    DPDK_CSTATS;
+#undef DPDK_CSTAT
+
+    i = index;
+#define DPDK_CSTAT(NAME)                                     \
+    custom_stats->counters[i++].value = dev->NAME;
+    DPDK_CSTATS;
+#undef DPDK_CSTAT
+    rte_spinlock_unlock(&dev->stats_lock);
 
     ovs_mutex_unlock(&dev->mutex);
 
@@ -2865,17 +2933,39 @@ netdev_dpdk_vhost_get_custom_stats(const struct netdev *netdev,
                                    struct netdev_custom_stats *custom_stats)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    int i;
+
+#define VHOST_CSTATS                        \
+    VHOST_CSTAT(tx_retries)                 \
+    VHOST_CSTAT(tx_failure_drops)           \
+    VHOST_CSTAT(tx_mtu_exceeded_drops)      \
+    VHOST_CSTAT(tx_qos_drops)               \
+    VHOST_CSTAT(rx_qos_drops)
+
+#define VHOST_CSTAT(NAME) +1
+    custom_stats->size = VHOST_CSTATS;
+#undef VHOST_CSTAT
+
+
+    custom_stats->counters = xcalloc(custom_stats->size,
+                                     sizeof *custom_stats->counters);
+    i = 0;
+#define VHOST_CSTAT(NAME)                                    \
+    ovs_strlcpy(custom_stats->counters[i++].name, #NAME,     \
+                NETDEV_CUSTOM_STATS_NAME_SIZE);
+    VHOST_CSTATS;
+#undef VHOST_CSTAT
 
     ovs_mutex_lock(&dev->mutex);
 
-    custom_stats->size = VHOST_CUSTOM_STATS_SIZE;
-    custom_stats->counters = xcalloc(custom_stats->size,
-                                     sizeof *custom_stats->counters);
-    ovs_strlcpy(custom_stats->counters[0].name, VHOST_STAT_TX_RETRIES,
-                NETDEV_CUSTOM_STATS_NAME_SIZE);
-
     rte_spinlock_lock(&dev->stats_lock);
-    custom_stats->counters[0].value = dev->tx_retries;
+
+    i = 0;
+#define VHOST_CSTAT(NAME)                                    \
+    custom_stats->counters[i++].value = dev->NAME;
+    VHOST_CSTATS;
+#undef VHOST_CSTAT
+
     rte_spinlock_unlock(&dev->stats_lock);
 
     ovs_mutex_unlock(&dev->mutex);

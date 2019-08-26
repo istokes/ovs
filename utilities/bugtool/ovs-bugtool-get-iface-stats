@@ -1,0 +1,25 @@
+#! /bin/bash
+
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of version 2.1 of the GNU Lesser General
+# Public License as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# Copyright (C) 2019 Ericsson AB
+
+for bridge in `ovs-vsctl -- --real list-br`
+do
+    echo -e "\nBridge : ${bridge}\n"
+    for iface in `ovs-vsctl list-ifaces ${bridge}`
+    do
+        echo -e "iface : ${iface}"
+        ovs-vsctl get interface ${iface} statistics
+        echo -e "\n"
+    done
+    echo -e "iface : ${bridge}"
+    ovs-vsctl get interface ${bridge} statistics
+done

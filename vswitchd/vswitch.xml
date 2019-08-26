@@ -3486,6 +3486,30 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           the above.
         </column>
       </group>
+      <group title="Statistics: Custom stats">
+        <column name="statistics" key="tx_retries">
+          Total number of transmit retries on a vhost-user or vhost-user-client
+          interface.
+        </column>
+        <column name="statistics" key="tx_failure_drops">
+          Total number of packets dropped because DPDP transmit API for
+          physical/vhost ports fails to transmit the packets. This happens
+          most likely because the transmit queue is full or has been filled
+          up. There are other reasons as well which are unlikely to happen.
+        </column>
+        <column name="statistics" key="tx_mtu_exceeded_drops">
+          Number of packets dropped due to packet length exceeding the max
+          device MTU.
+        </column>
+        <column name="statistics" key="tx_qos_drops">
+          Total number of packets dropped due to transmission rate exceeding
+          the configured egress policer rate.
+        </column>
+        <column name="statistics" key="rx_qos_drops">
+          Total number of packets dropped due to reception rate exceeding
+          the configured ingress policer rate.
+        </column>
+      </group>
     </group>
 
     <group title="Ingress Policing">

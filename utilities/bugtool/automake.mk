@@ -22,7 +22,8 @@ bugtool_scripts = \
 	utilities/bugtool/ovs-bugtool-ovs-bridge-datapath-type \
 	utilities/bugtool/ovs-bugtool-ovs-vswitchd-threads-affinity \
 	utilities/bugtool/ovs-bugtool-qos-configs \
-	utilities/bugtool/ovs-bugtool-get-dpdk-nic-numa
+	utilities/bugtool/ovs-bugtool-get-dpdk-nic-numa \
+	utilities/bugtool/ovs-bugtool-get-iface-stats
 
 scripts_SCRIPTS += $(bugtool_scripts)
 
