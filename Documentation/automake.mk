@@ -10,6 +10,7 @@ DOC_SOURCE = \
 	Documentation/intro/why-ovs.rst \
 	Documentation/intro/install/index.rst \
 	Documentation/intro/install/bash-completion.rst \
+	Documentation/intro/install/afxdp.rst \
 	Documentation/intro/install/debian.rst \
 	Documentation/intro/install/documentation.rst \
 	Documentation/intro/install/distributions.rst \
@@ -17,7 +18,6 @@ DOC_SOURCE = \
 	Documentation/intro/install/fedora.rst \
 	Documentation/intro/install/general.rst \
 	Documentation/intro/install/netbsd.rst \
-	Documentation/intro/install/ovn-upgrades.rst \
 	Documentation/intro/install/rhel.rst \
 	Documentation/intro/install/userspace.rst \
 	Documentation/intro/install/windows.rst \
@@ -25,12 +25,8 @@ DOC_SOURCE = \
 	Documentation/tutorials/index.rst \
 	Documentation/tutorials/faucet.rst \
 	Documentation/tutorials/ovs-advanced.rst \
-	Documentation/tutorials/ovn-openstack.rst \
-	Documentation/tutorials/ovn-sandbox.rst \
 	Documentation/tutorials/ovs-conntrack.rst \
 	Documentation/tutorials/ipsec.rst \
-	Documentation/tutorials/ovn-ipsec.rst \
-	Documentation/tutorials/ovn-rbac.rst \
 	Documentation/topics/index.rst \
 	Documentation/topics/bonding.rst \
 	Documentation/topics/idl-compound-indexes.rst \
@@ -47,29 +43,28 @@ DOC_SOURCE = \
 	Documentation/topics/dpdk/ring.rst \
 	Documentation/topics/dpdk/vdev.rst \
 	Documentation/topics/dpdk/vhost-user.rst \
+	Documentation/topics/fuzzing/index.rst \
+	Documentation/topics/fuzzing/what-is-fuzzing.rst \
+	Documentation/topics/fuzzing/ovs-fuzzing-infrastructure.rst \
+	Documentation/topics/fuzzing/ovs-fuzzers.rst \
+	Documentation/topics/fuzzing/security-analysis-of-ovs-fuzzers.rst \
 	Documentation/topics/testing.rst \
-	Documentation/topics/high-availability.rst \
 	Documentation/topics/integration.rst \
 	Documentation/topics/language-bindings.rst \
 	Documentation/topics/networking-namespaces.rst \
 	Documentation/topics/openflow.rst \
-	Documentation/topics/ovn-news-2.8.rst \
 	Documentation/topics/ovsdb-replication.rst \
 	Documentation/topics/porting.rst \
-	Documentation/topics/role-based-access-control.rst \
 	Documentation/topics/tracing.rst \
 	Documentation/topics/windows.rst \
 	Documentation/howto/index.rst \
-	Documentation/howto/docker.rst \
 	Documentation/howto/dpdk.rst \
-	Documentation/howto/firewalld.rst \
 	Documentation/howto/ipsec.rst \
 	Documentation/howto/kvm.rst \
 	Documentation/howto/libvirt.rst \
 	Documentation/howto/selinux.rst \
 	Documentation/howto/ssl.rst \
 	Documentation/howto/lisp.rst \
-	Documentation/howto/openstack-containers.rst \
 	Documentation/howto/qos.png \
 	Documentation/howto/qos.rst \
 	Documentation/howto/sflow.png \
@@ -88,7 +83,6 @@ DOC_SOURCE = \
 	Documentation/faq/general.rst \
 	Documentation/faq/issues.rst \
 	Documentation/faq/openflow.rst \
-	Documentation/faq/ovn.rst \
 	Documentation/faq/qos.rst \
 	Documentation/faq/releases.rst \
 	Documentation/faq/terminology.rst \
@@ -121,7 +115,6 @@ EXTRA_DIST += $(DOC_SOURCE)
 
 # You can set these variables from the command line.
 SPHINXOPTS =
-SPHINXBUILD = sphinx-build
 SPHINXSRCDIR = $(srcdir)/Documentation
 SPHINXBUILDDIR = $(builddir)/Documentation/_build
 

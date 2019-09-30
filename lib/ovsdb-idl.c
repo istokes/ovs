@@ -239,6 +239,7 @@ static bool ovsdb_idl_check_server_db(struct ovsdb_idl *);
 static void ovsdb_idl_send_monitor_request(struct ovsdb_idl *,
                                            struct ovsdb_idl_db *,
                                            enum ovsdb_idl_monitor_method);
+static void ovsdb_idl_db_clear(struct ovsdb_idl_db *db);
 
 struct ovsdb_idl {
     struct ovsdb_idl_db server;
@@ -557,6 +558,7 @@ ovsdb_idl_db_destroy(struct ovsdb_idl_db *db)
 {
     ovs_assert(!db->txn);
     ovsdb_idl_db_txn_abort_all(db);
+    ovsdb_idl_db_clear(db);
     for (size_t i = 0; i < db->class_->n_tables; i++) {
         struct ovsdb_idl_table *table = &db->tables[i];
         ovsdb_idl_condition_destroy(&table->condition);
@@ -581,7 +583,6 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
     if (idl) {
         ovsdb_idl_clear(idl);
         jsonrpc_session_close(idl->session);
-
         ovsdb_idl_db_destroy(&idl->server);
         ovsdb_idl_db_destroy(&idl->data);
         json_destroy(idl->request_id);
@@ -656,12 +657,8 @@ ovsdb_idl_state_to_string(enum ovsdb_idl_state state)
 static void
 ovsdb_idl_retry_at(struct ovsdb_idl *idl, const char *where)
 {
-    if (idl->session && jsonrpc_session_get_n_remotes(idl->session) > 1) {
-        ovsdb_idl_force_reconnect(idl);
-        ovsdb_idl_transition_at(idl, IDL_S_RETRY, where);
-    } else {
-        ovsdb_idl_transition_at(idl, IDL_S_ERROR, where);
-    }
+    ovsdb_idl_force_reconnect(idl);
+    ovsdb_idl_transition_at(idl, IDL_S_RETRY, where);
 }
 
 static void
@@ -1894,8 +1891,7 @@ ovsdb_idl_check_server_db(struct ovsdb_idl *idl)
     if (!database) {
         VLOG_INFO_RL(&rl, "%s: server does not have %s database",
                      server_name, idl->data.class_->database);
-    } else if (!strcmp(database->model, "clustered")
-               && jsonrpc_session_get_n_remotes(idl->session) > 1) {
+    } else if (!strcmp(database->model, "clustered")) {
         uint64_t index = database->n_index ? *database->index : 0;
 
         if (!database->schema) {
@@ -4486,6 +4482,7 @@ ovsdb_idl_txn_write__(const struct ovsdb_idl_row *row_,
     }
     (column->unparse)(row);
     (column->parse)(row, &row->new_datum[column_idx]);
+    row->parsed = true;
     if (!index_row) {
         ovsdb_idl_add_to_indexes(row);
     }

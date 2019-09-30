@@ -1481,6 +1481,9 @@ xlate_ofport_remove(struct ofport_dpif *ofport)
     ovs_assert(new_xcfg);
 
     xport = xport_lookup(new_xcfg, ofport);
+    if (xport) {
+        tnl_neigh_flush(netdev_get_name(xport->netdev));
+    }
     xlate_xport_remove(new_xcfg, xport);
 }
 
@@ -3211,11 +3214,13 @@ compose_sflow_action(struct xlate_ctx *ctx)
         return 0;
     }
 
-    struct user_action_cookie cookie = {
-        .type = USER_ACTION_COOKIE_SFLOW,
-        .ofp_in_port = ctx->xin->flow.in_port.ofp_port,
-        .ofproto_uuid = ctx->xbridge->ofproto->uuid
-    };
+    struct user_action_cookie cookie;
+
+    memset(&cookie, 0, sizeof cookie);
+    cookie.type = USER_ACTION_COOKIE_SFLOW;
+    cookie.ofp_in_port = ctx->xin->flow.in_port.ofp_port;
+    cookie.ofproto_uuid = ctx->xbridge->ofproto->uuid;
+
     return compose_sample_action(ctx, dpif_sflow_get_probability(sflow),
                                  &cookie, ODPP_NONE, true);
 }
@@ -3255,12 +3260,14 @@ compose_ipfix_action(struct xlate_ctx *ctx, odp_port_t output_odp_port)
         }
     }
 
-    struct user_action_cookie cookie = {
-        .type = USER_ACTION_COOKIE_IPFIX,
-        .ofp_in_port = ctx->xin->flow.in_port.ofp_port,
-        .ofproto_uuid = ctx->xbridge->ofproto->uuid,
-        .ipfix.output_odp_port = output_odp_port
-    };
+    struct user_action_cookie cookie;
+
+    memset(&cookie, 0, sizeof cookie);
+    cookie.type = USER_ACTION_COOKIE_IPFIX;
+    cookie.ofp_in_port = ctx->xin->flow.in_port.ofp_port;
+    cookie.ofproto_uuid = ctx->xbridge->ofproto->uuid;
+    cookie.ipfix.output_odp_port = output_odp_port;
+
     compose_sample_action(ctx,
                           dpif_ipfix_get_bridge_exporter_probability(ipfix),
                           &cookie, tunnel_out_port, false);
@@ -3403,6 +3410,19 @@ tnl_route_lookup_flow(const struct xlate_ctx *ctx,
             }
         }
     }
+
+    /* If tunnel IP isn't configured on bridges, then we search all ports. */
+    HMAP_FOR_EACH (xbridge, hmap_node, &ctx->xcfg->xbridges) {
+        struct xport *port;
+
+        HMAP_FOR_EACH (port, ofp_node, &xbridge->xports) {
+            if (!strncmp(netdev_get_name(port->netdev),
+                         out_dev, IFNAMSIZ)) {
+                *out_port = port;
+                return 0;
+            }
+        }
+    }
     return -ENOENT;
 }
 
@@ -3411,6 +3431,7 @@ compose_table_xlate(struct xlate_ctx *ctx, const struct xport *out_dev,
                     struct dp_packet *packet)
 {
     struct xbridge *xbridge = out_dev->xbridge;
+    ovs_version_t version = ofproto_dpif_get_tables_version(xbridge->ofproto);
     struct ofpact_output output;
     struct flow flow;
 
@@ -3420,8 +3441,7 @@ compose_table_xlate(struct xlate_ctx *ctx, const struct xport *out_dev,
     output.port = OFPP_TABLE;
     output.max_len = 0;
 
-    return ofproto_dpif_execute_actions__(xbridge->ofproto,
-                                          ctx->xin->tables_version, &flow,
+    return ofproto_dpif_execute_actions__(xbridge->ofproto, version, &flow,
                                           NULL, &output.ofpact, sizeof output,
                                           ctx->depth, ctx->resubmits, packet);
 }
@@ -3965,6 +3985,16 @@ is_nd_dst_correct(const struct flow *flow, const struct in6_addr *ipv6_addr)
             IN6_ARE_ADDR_EQUAL(&flow->ipv6_dst, ipv6_addr);
 }
 
+static bool
+is_neighbor_reply_matched(const struct flow *flow, struct in6_addr *ip_addr)
+{
+    return ((IN6_IS_ADDR_V4MAPPED(ip_addr) &&
+             flow->dl_type == htons(ETH_TYPE_ARP) &&
+             in6_addr_get_mapped_ipv4(ip_addr) == flow->nw_dst) ||
+            (!IN6_IS_ADDR_V4MAPPED(ip_addr) &&
+              is_nd_dst_correct(flow, ip_addr)));
+}
+
 /* Function verifies if the ARP reply or Neighbor Advertisement represented by
  * 'flow' addresses the 'xbridge' of 'ctx'. Returns true if the ARP TA or
  * neighbor discovery destination is in the list of configured IP addresses of
@@ -3979,11 +4009,7 @@ is_neighbor_reply_correct(const struct xlate_ctx *ctx, const struct flow *flow)
     /* Verify if 'nw_dst' of ARP or 'ipv6_dst' of ICMPV6 is in the list. */
     for (i = 0; xbridge_addr && i < xbridge_addr->n_addr; i++) {
         struct in6_addr *ip_addr = &xbridge_addr->addr[i];
-        if ((IN6_IS_ADDR_V4MAPPED(ip_addr) &&
-             flow->dl_type == htons(ETH_TYPE_ARP) &&
-             in6_addr_get_mapped_ipv4(ip_addr) == flow->nw_dst) ||
-            (!IN6_IS_ADDR_V4MAPPED(ip_addr) &&
-              is_nd_dst_correct(flow, ip_addr))) {
+        if (is_neighbor_reply_matched(flow, ip_addr)) {
             /* Found a match. */
             ret = true;
             break;
@@ -3991,20 +4017,35 @@ is_neighbor_reply_correct(const struct xlate_ctx *ctx, const struct flow *flow)
     }
 
     xbridge_addr_unref(xbridge_addr);
+
+    /* If not found in bridge's IPs, search in its ports. */
+    if (!ret) {
+        struct in6_addr *ip_addr, *mask;
+        struct xport *port;
+        int error, n_in6;
+
+        HMAP_FOR_EACH (port, ofp_node, &ctx->xbridge->xports) {
+            error = netdev_get_addr_list(port->netdev, &ip_addr,
+                                         &mask, &n_in6);
+            if (!error && is_neighbor_reply_matched(flow, ip_addr)) {
+                /* Found a match. */
+                ret = true;
+                break;
+            }
+        }
+    }
     return ret;
 }
 
 static bool
-terminate_native_tunnel(struct xlate_ctx *ctx, ofp_port_t ofp_port,
-                        struct flow *flow, struct flow_wildcards *wc,
-                        odp_port_t *tnl_port)
+terminate_native_tunnel(struct xlate_ctx *ctx, struct flow *flow,
+                        struct flow_wildcards *wc, odp_port_t *tnl_port)
 {
     *tnl_port = ODPP_NONE;
 
     /* XXX: Write better Filter for tunnel port. We can use in_port
      * in tunnel-port flow to avoid these checks completely. */
-    if (ofp_port == OFPP_LOCAL &&
-        ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
+    if (ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
         *tnl_port = tnl_port_map_lookup(flow, wc);
 
         /* If no tunnel port was found and it's about an ARP or ICMPv6 packet,
@@ -4148,7 +4189,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             native_tunnel_output(ctx, xport, flow, odp_port, truncate);
             flow->tunnel = flow_tnl; /* Restore tunnel metadata */
 
-        } else if (terminate_native_tunnel(ctx, ofp_port, flow, wc,
+        } else if (terminate_native_tunnel(ctx, flow, wc,
                                            &odp_tnl_port)) {
             /* Intercept packet to be received on native tunnel port. */
             nl_msg_put_odp_port(ctx->odp_actions, OVS_ACTION_ATTR_TUNNEL_POP,
@@ -4764,6 +4805,7 @@ xlate_controller_action(struct xlate_ctx *ctx, int len,
         .stack_size = ctx->stack.size,
         .mirrors = ctx->mirrors,
         .conntracked = ctx->conntracked,
+        .was_mpls = ctx->was_mpls,
         .ofpacts = NULL,
         .ofpacts_len = 0,
         .action_set = NULL,
@@ -4838,6 +4880,7 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
         .stack_size = ctx->stack.size,
         .mirrors = ctx->mirrors,
         .conntracked = ctx->conntracked,
+        .was_mpls = ctx->was_mpls,
         .xport_uuid = ctx->xin->xport_uuid,
         .ofpacts = ctx->frozen_actions.data,
         .ofpacts_len = ctx->frozen_actions.size,
@@ -5518,19 +5561,19 @@ xlate_sample_action(struct xlate_ctx *ctx,
         }
     }
 
-    struct user_action_cookie cookie = {
-        .type = USER_ACTION_COOKIE_FLOW_SAMPLE,
-        .ofp_in_port = ctx->xin->flow.in_port.ofp_port,
-        .ofproto_uuid = ctx->xbridge->ofproto->uuid,
-        .flow_sample = {
-            .probability = os->probability,
-            .collector_set_id = os->collector_set_id,
-            .obs_domain_id = os->obs_domain_id,
-            .obs_point_id = os->obs_point_id,
-            .output_odp_port = output_odp_port,
-            .direction = os->direction,
-        }
-    };
+    struct user_action_cookie cookie;
+
+    memset(&cookie, 0, sizeof cookie);
+    cookie.type = USER_ACTION_COOKIE_FLOW_SAMPLE;
+    cookie.ofp_in_port = ctx->xin->flow.in_port.ofp_port;
+    cookie.ofproto_uuid = ctx->xbridge->ofproto->uuid;
+    cookie.flow_sample.probability = os->probability;
+    cookie.flow_sample.collector_set_id = os->collector_set_id;
+    cookie.flow_sample.obs_domain_id = os->obs_domain_id;
+    cookie.flow_sample.obs_point_id = os->obs_point_id;
+    cookie.flow_sample.output_odp_port = output_odp_port;
+    cookie.flow_sample.direction = os->direction;
+
     compose_sample_action(ctx, probability, &cookie, tunnel_out_port, false);
 }
 

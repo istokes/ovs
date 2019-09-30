@@ -45,7 +45,6 @@
 #include "openvswitch/vlog.h"
 #include "lib/netdev-provider.h"
 
-#define MAX_QUEUE_LENGTH 512
 #define UPCALL_MAX_BATCH 64
 #define REVALIDATE_MAX_BATCH 50
 
@@ -979,7 +978,8 @@ udpif_revalidator(void *arg)
                           duration);
             }
 
-            poll_timer_wait_until(start_time + MIN(ofproto_max_idle, 500));
+            poll_timer_wait_until(start_time + MIN(ofproto_max_idle,
+                                                   ofproto_max_revalidator));
             seq_wait(udpif->reval_seq, last_reval_seq);
             latch_wait(&udpif->exit_latch);
             latch_wait(&udpif->pause_latch);
@@ -1065,6 +1065,7 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
     odp_port_t port;
     uint32_t pid;
 
+    memset(&cookie, 0, sizeof cookie);
     cookie.type = USER_ACTION_COOKIE_SLOW_PATH;
     cookie.ofp_in_port = ofp_in_port;
     cookie.ofproto_uuid = *ofproto_uuid;
@@ -1526,6 +1527,7 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
                                : NULL),
                 am->pin.up.action_set_len = state->action_set_len,
                 am->pin.up.bridge = upcall->ofproto->uuid;
+                am->pin.up.odp_port = upcall->packet->md.in_port.odp_port;
             }
 
             /* We don't want to use the upcall 'flow', since it may be
@@ -2039,7 +2041,7 @@ should_revalidate(const struct udpif *udpif, uint64_t packets,
         return true;
     }
 
-    if (udpif->dump_duration < 200) {
+    if (udpif->dump_duration < ofproto_max_revalidator / 2) {
         /* We are likely to handle full revalidation for the flows. */
         return true;
     }
@@ -2059,8 +2061,8 @@ should_revalidate(const struct udpif *udpif, uint64_t packets,
     duration = now - used;
     metric = duration / packets;
 
-    if (metric < 200) {
-        /* The flow is receiving more than ~5pps, so keep it. */
+    if (metric < 1000 / ofproto_min_revalidate_pps) {
+        /* The flow is receiving more than min-revalidate-pps, so keep it. */
         return true;
     }
     return false;

@@ -227,6 +227,11 @@ static struct if_notifier *ifnotifier;
 static struct seq *ifaces_changed;
 static uint64_t last_ifaces_changed;
 
+/* Default/min/max packet-in queue sizes towards the controllers. */
+#define BRIDGE_CONTROLLER_PACKET_QUEUE_DEFAULT_SIZE 100
+#define BRIDGE_CONTROLLER_PACKET_QUEUE_MIN_SIZE 1
+#define BRIDGE_CONTROLLER_PACKET_QUEUE_MAX_SIZE 512
+
 static void add_del_bridges(const struct ovsrec_open_vswitch *);
 static void bridge_run__(void);
 static void bridge_create(const struct ovsrec_bridge *);
@@ -601,6 +606,12 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
                                         OFPROTO_FLOW_LIMIT_DEFAULT));
     ofproto_set_max_idle(smap_get_int(&ovs_cfg->other_config, "max-idle",
                                       OFPROTO_MAX_IDLE_DEFAULT));
+    ofproto_set_max_revalidator(smap_get_int(&ovs_cfg->other_config,
+                                             "max-revalidator",
+                                             OFPROTO_MAX_REVALIDATOR_DEFAULT));
+    ofproto_set_min_revalidate_pps(
+        smap_get_int(&ovs_cfg->other_config, "min-revalidate-pps",
+                     OFPROTO_MIN_REVALIDATE_PPS_DEFAULT));
     ofproto_set_vlan_limit(smap_get_int(&ovs_cfg->other_config, "vlan-limit",
                                        LEGACY_MAX_VLAN_HEADERS));
     ofproto_set_bundle_idle_timeout(smap_get_int(&ovs_cfg->other_config,
@@ -1115,6 +1126,25 @@ bridge_get_allowed_versions(struct bridge *br)
 
     return ofputil_versions_from_strings(br->cfg->protocols,
                                          br->cfg->n_protocols);
+}
+
+static int
+bridge_get_controller_queue_size(struct bridge *br,
+                                 struct ovsrec_controller *c)
+{
+    if (c && c->controller_queue_size) {
+        return *c->controller_queue_size;
+    }
+
+    int queue_size = smap_get_int(&br->cfg->other_config,
+                                  "controller-queue-size",
+                                  BRIDGE_CONTROLLER_PACKET_QUEUE_DEFAULT_SIZE);
+    if (queue_size < BRIDGE_CONTROLLER_PACKET_QUEUE_MIN_SIZE ||
+            queue_size > BRIDGE_CONTROLLER_PACKET_QUEUE_MAX_SIZE) {
+        return BRIDGE_CONTROLLER_PACKET_QUEUE_DEFAULT_SIZE;
+    }
+
+    return queue_size;
 }
 
 /* Set NetFlow configuration on 'br'. */
@@ -1810,8 +1840,13 @@ iface_do_create(const struct bridge *br,
     *ofp_portp = iface_pick_ofport(iface_cfg);
     error = ofproto_port_add(br->ofproto, netdev, ofp_portp);
     if (error) {
-        VLOG_WARN_BUF(errp, "could not add network device %s to ofproto (%s)",
-                      iface_cfg->name, ovs_strerror(error));
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+        *errp = xasprintf("could not add network device %s to ofproto (%s)",
+                          iface_cfg->name, ovs_strerror(error));
+        if (!VLOG_DROP_WARN(&rl)) {
+            VLOG_WARN("%s", *errp);
+        }
         goto error;
     }
 
@@ -2387,6 +2422,7 @@ iface_refresh_stats(struct iface *iface)
     IFACE_STAT(rx_frame_errors,         "rx_frame_err")             \
     IFACE_STAT(rx_over_errors,          "rx_over_err")              \
     IFACE_STAT(rx_crc_errors,           "rx_crc_err")               \
+    IFACE_STAT(rx_missed_errors,        "rx_missed_errors")         \
     IFACE_STAT(collisions,              "collisions")               \
     IFACE_STAT(rx_1_to_64_packets,      "rx_1_to_64_packets")       \
     IFACE_STAT(rx_65_to_127_packets,    "rx_65_to_127_packets")     \
@@ -3605,6 +3641,7 @@ bridge_configure_remotes(struct bridge *br,
         .band = OFPROTO_OUT_OF_BAND,
         .enable_async_msgs = true,
         .allowed_versions = bridge_get_allowed_versions(br),
+        .max_pktq_size = bridge_get_controller_queue_size(br, NULL),
     };
     shash_add_nocopy(
         &ocs, xasprintf("punix:%s/%s.mgmt", ovs_rundir(), br->name), oc);
@@ -3680,6 +3717,7 @@ bridge_configure_remotes(struct bridge *br,
             .enable_async_msgs = (!c->enable_async_messages
                                   || *c->enable_async_messages),
             .allowed_versions = bridge_get_allowed_versions(br),
+            .max_pktq_size = bridge_get_controller_queue_size(br, c),
             .rate_limit = (c->controller_rate_limit
                            ? *c->controller_rate_limit : 0),
             .burst_limit = (c->controller_burst_limit

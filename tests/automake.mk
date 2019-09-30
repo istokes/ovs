@@ -4,12 +4,14 @@ EXTRA_DIST += \
 	$(SYSTEM_TESTSUITE_AT) \
 	$(SYSTEM_KMOD_TESTSUITE_AT) \
 	$(SYSTEM_USERSPACE_TESTSUITE_AT) \
+	$(SYSTEM_AFXDP_TESTSUITE_AT) \
 	$(SYSTEM_OFFLOADS_TESTSUITE_AT) \
 	$(SYSTEM_DPDK_TESTSUITE_AT) \
 	$(OVSDB_CLUSTER_TESTSUITE_AT) \
 	$(TESTSUITE) \
 	$(SYSTEM_KMOD_TESTSUITE) \
 	$(SYSTEM_USERSPACE_TESTSUITE) \
+	$(SYSTEM_AFXDP_TESTSUITE) \
 	$(SYSTEM_OFFLOADS_TESTSUITE) \
 	$(SYSTEM_DPDK_TESTSUITE) \
 	$(OVSDB_CLUSTER_TESTSUITE) \
@@ -21,8 +23,7 @@ EXTRA_DIST += \
 COMMON_MACROS_AT = \
 	tests/ovsdb-macros.at \
 	tests/ovs-macros.at \
-	tests/ofproto-macros.at \
-	tests/ovn-macros.at
+	tests/ofproto-macros.at
 
 TESTSUITE_AT = \
 	tests/testsuite.at \
@@ -102,16 +103,9 @@ TESTSUITE_AT = \
 	tests/vlog.at \
 	tests/vtep-ctl.at \
 	tests/auto-attach.at \
-	tests/ovn.at \
-	tests/ovn-northd.at \
-	tests/ovn-nbctl.at \
-	tests/ovn-sbctl.at \
-	tests/ovn-controller.at \
-	tests/ovn-controller-vtep.at \
 	tests/mcast-snooping.at \
 	tests/packet-type-aware.at \
-	tests/nsh.at \
-	tests/ovn-performance.at
+	tests/nsh.at
 
 EXTRA_DIST += $(FUZZ_REGRESSION_TESTS)
 FUZZ_REGRESSION_TESTS = \
@@ -156,13 +150,16 @@ SYSTEM_KMOD_TESTSUITE_AT = \
 
 SYSTEM_USERSPACE_TESTSUITE_AT = \
 	tests/system-userspace-testsuite.at \
-	tests/system-ovn.at \
 	tests/system-userspace-macros.at \
 	tests/system-userspace-packet-type-aware.at
 
+SYSTEM_AFXDP_TESTSUITE_AT = \
+	tests/system-userspace-macros.at \
+	tests/system-afxdp-testsuite.at \
+	tests/system-afxdp-macros.at
+
 SYSTEM_TESTSUITE_AT = \
 	tests/system-common-macros.at \
-	tests/system-ovn.at \
 	tests/system-layer3-tunnels.at \
 	tests/system-traffic.at \
 	tests/system-interface.at
@@ -184,12 +181,13 @@ TESTSUITE = $(srcdir)/tests/testsuite
 TESTSUITE_PATCH = $(srcdir)/tests/testsuite.patch
 SYSTEM_KMOD_TESTSUITE = $(srcdir)/tests/system-kmod-testsuite
 SYSTEM_USERSPACE_TESTSUITE = $(srcdir)/tests/system-userspace-testsuite
+SYSTEM_AFXDP_TESTSUITE = $(srcdir)/tests/system-afxdp-testsuite
 SYSTEM_OFFLOADS_TESTSUITE = $(srcdir)/tests/system-offloads-testsuite
 SYSTEM_DPDK_TESTSUITE = $(srcdir)/tests/system-dpdk-testsuite
 OVSDB_CLUSTER_TESTSUITE = $(srcdir)/tests/ovsdb-cluster-testsuite
 DISTCLEANFILES += tests/atconfig tests/atlocal
 
-AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):$(SSL_DIR):ovn/controller-vtep:ovn/northd:ovn/utilities:ovn/controller
+AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):$(SSL_DIR):ovn/utilities
 
 check-local:
 	set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH); \
@@ -230,9 +228,7 @@ check-lcov: all $(check_DATA) clean-lcov
 # valgrind support
 
 valgrind_wrappers = \
-	tests/valgrind/ovn-controller \
 	tests/valgrind/ovn-nbctl \
-	tests/valgrind/ovn-northd \
 	tests/valgrind/ovn-sbctl \
 	tests/valgrind/ovs-appctl \
 	tests/valgrind/ovs-ofctl \
@@ -256,7 +252,8 @@ $(valgrind_wrappers): tests/valgrind-wrapper.in
 CLEANFILES += $(valgrind_wrappers)
 EXTRA_DIST += tests/valgrind-wrapper.in
 
-VALGRIND = valgrind --log-file=valgrind.%p --leak-check=full \
+VALGRIND = valgrind --log-file=valgrind.%p \
+	--leak-check=full --track-origins=yes \
 	--suppressions=$(abs_top_srcdir)/tests/glibc.supp \
 	--suppressions=$(abs_top_srcdir)/tests/openssl.supp --num-callers=20
 HELGRIND = valgrind --log-file=helgrind.%p --tool=helgrind \
@@ -317,6 +314,10 @@ check-system-userspace: all
 	set $(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)'; \
 	"$$@" $(TESTSUITEFLAGS) -j1 || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
+check-afxdp: all
+	set $(SHELL) '$(SYSTEM_AFXDP_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+
 check-offloads: all
 	set $(SHELL) '$(SYSTEM_OFFLOADS_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)'; \
 	"$$@" $(TESTSUITEFLAGS) -j1 || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
@@ -351,6 +352,10 @@ $(SYSTEM_KMOD_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_KMOD_TESTSU
 	$(AM_V_at)mv $@.tmp $@
 
 $(SYSTEM_USERSPACE_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_USERSPACE_TESTSUITE_AT) $(COMMON_MACROS_AT)
+	$(AM_V_GEN)$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
+	$(AM_V_at)mv $@.tmp $@
+
+$(SYSTEM_AFXDP_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_AFXDP_TESTSUITE_AT) $(COMMON_MACROS_AT)
 	$(AM_V_GEN)$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
 	$(AM_V_at)mv $@.tmp $@
 
@@ -430,7 +435,6 @@ tests_ovstest_SOURCES = \
 	tests/test-netflow.c \
 	tests/test-odp.c \
 	tests/test-ofpbuf.c \
-	tests/test-ovn.c \
 	tests/test-packets.c \
 	tests/test-random.c \
 	tests/test-rcu.c \
@@ -458,7 +462,7 @@ tests_ovstest_SOURCES += \
 	tests/test-netlink-conntrack.c
 endif
 
-tests_ovstest_LDADD = lib/libopenvswitch.la ovn/lib/libovn.la
+tests_ovstest_LDADD = lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/test-stream
 tests_test_stream_SOURCES = tests/test-stream.c

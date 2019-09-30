@@ -45,6 +45,7 @@ Installation from Source
    xenserver
    userspace
    dpdk
+   afxdp
 
 Installation from Packages
 --------------------------
@@ -60,14 +61,6 @@ provided below.
    debian
    fedora
    rhel
-
-Upgrades
---------
-
-.. toctree::
-   :maxdepth: 2
-
-   ovn-upgrades
 
 Others
 ------

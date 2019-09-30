@@ -195,7 +195,7 @@ m4_define([_OVS_VSWITCHD_START],
 # 'vswitchd-aux-args' provides a way to pass extra command line arguments
 # to ovs-vswitchd
 m4_define([OVS_VSWITCHD_START],
-  [_OVS_VSWITCHD_START([--enable-dummy$3 --disable-system $4])
+  [_OVS_VSWITCHD_START([--enable-dummy$3 --disable-system --disable-system-route $4])
    AT_CHECK([add_of_br 0 $1 m4_if([$2], [], [], [| uuidfilt])], [0], [$2])
 ])
 
@@ -214,7 +214,7 @@ check_logs () {
 
     # We most notably ignore 'Broken pipe' warnings.  These often and
     # intermittently appear in ovsdb-server.log, because *ctl commands
-    # (e.g. ovs-vsctl, ovn-nbctl) exit right after committing a change to the
+    # (e.g. ovs-vsctl) exit right after committing a change to the
     # database.  However, in reaction, some daemon may immediately update the
     # database, and this later update may cause database sending update back to
     # *ctl command if *ctl has not exited yet.  If *ctl command exits before

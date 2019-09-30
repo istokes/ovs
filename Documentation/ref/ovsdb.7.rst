@@ -509,8 +509,13 @@ Changing Database Service Model
 -------------------------------
 
 Use ``ovsdb-tool create-cluster`` to create a clustered database from the
-contents of a standalone database.  Use ``ovsdb-tool backup`` to create a
-standalone database from the contents of a clustered database.
+contents of a standalone database.  Use ``ovsdb-client backup`` to create a
+standalone database from the contents of a running clustered database.
+When the cluster is down and cannot be revived, ``ovsdb-client backup`` will
+not work.
+
+Use ``ovsdb-tool cluster-to-standalone`` to convert clustered database to
+standalone database when the cluster is down and cannot be revived.
 
 Upgrading or Downgrading a Database
 -----------------------------------

@@ -143,7 +143,7 @@ def reset_counters():
 # something in parentheses (usually an expression) then a left curly brace.
 #
 # 'do' almost qualifies but it's also used as "do { ... } while (...);".
-__parenthesized_constructs = 'if|for|while|switch|[_A-Z]+FOR_*EACH[_A-Z]*'
+__parenthesized_constructs = 'if|for|while|switch|[_A-Z]+FOR_*EACH[_A-Z0-9]*'
 
 __regex_added_line = re.compile(r'^\+{1,2}[^\+][\w\W]*')
 __regex_subtracted_line = re.compile(r'^\-{1,2}[^\-][\w\W]*')
@@ -172,7 +172,7 @@ __regex_has_xxx_mark = re.compile(r'.*xxx.*', re.IGNORECASE)
 __regex_added_doc_rst = re.compile(
                     r'\ndiff .*Documentation/.*rst\nnew file mode')
 __regex_empty_return = re.compile(r'\s*return;')
-__regex_if_macros = re.compile(r'^ +(%s) \([\S][\s\S]+[\S]\) { \\' %
+__regex_if_macros = re.compile(r'^ +(%s) \([\S]([\s\S]+[\S])*\) { +\\' %
                                __parenthesized_constructs)
 
 skip_leading_whitespace_check = False
@@ -843,6 +843,8 @@ def ovs_checkpatch_parse(text, filename, author=None, committer=None):
             # like DPDK or Linux and could contain workarounds not suitable
             # for a common style.
             if current_file.startswith('include/sparse'):
+                continue
+            if current_file.startswith('utilities/bugtool'):
                 continue
             run_checks(current_file, cmp_line, lineno)
 

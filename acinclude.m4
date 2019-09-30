@@ -193,6 +193,13 @@ AC_DEFUN([OVS_CHECK_LINUX_TC], [
                [Define to 1 if TCA_VLAN_PUSH_VLAN_PRIORITY is available.])])
 
   AC_COMPILE_IFELSE([
+    AC_LANG_PROGRAM([#include <linux/tc_act/tc_mpls.h>], [
+        int x = TCA_MPLS_TTL;
+    ])],
+    [AC_DEFINE([HAVE_TCA_MPLS_TTL], [1],
+               [Define to 1 if HAVE_TCA_MPLS_TTL is available.])])
+
+  AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/tc_act/tc_tunnel_key.h>], [
         int x = TCA_TUNNEL_KEY_ENC_TTL;
     ])],
@@ -236,6 +243,41 @@ AC_DEFUN([OVS_FIND_DEPENDENCY], [
   AC_SEARCH_LIBS([$1], [$2], [], [
     AC_MSG_ERROR([unable to find $3, install the dependency package])
   ])
+])
+
+dnl OVS_CHECK_LINUX_AF_XDP
+dnl
+dnl Check both Linux kernel AF_XDP and libbpf support
+AC_DEFUN([OVS_CHECK_LINUX_AF_XDP], [
+  AC_ARG_ENABLE([afxdp],
+                [AC_HELP_STRING([--enable-afxdp], [Enable AF-XDP support])],
+                [], [enable_afxdp=no])
+  AC_MSG_CHECKING([whether AF_XDP is enabled])
+  if test "$enable_afxdp" != yes; then
+    AC_MSG_RESULT([no])
+    AF_XDP_ENABLE=false
+  else
+    AC_MSG_RESULT([yes])
+    AF_XDP_ENABLE=true
+
+    AC_CHECK_HEADER([bpf/libbpf.h], [],
+      [AC_MSG_ERROR([unable to find bpf/libbpf.h for AF_XDP support])])
+
+    AC_CHECK_HEADER([linux/if_xdp.h], [],
+      [AC_MSG_ERROR([unable to find linux/if_xdp.h for AF_XDP support])])
+
+    AC_CHECK_HEADER([bpf/xsk.h], [],
+      [AC_MSG_ERROR([unable to find bpf/xsk.h for AF_XDP support])])
+
+    AC_CHECK_FUNCS([pthread_spin_lock], [],
+      [AC_MSG_ERROR([unable to find pthread_spin_lock for AF_XDP support])])
+
+    AC_DEFINE([HAVE_AF_XDP], [1],
+              [Define to 1 if AF_XDP support is available and enabled.])
+    LIBBPF_LDADD=" -lbpf -lelf"
+    AC_SUBST([LIBBPF_LDADD])
+  fi
+  AM_CONDITIONAL([HAVE_AF_XDP], test "$AF_XDP_ENABLE" = true)
 ])
 
 dnl OVS_CHECK_DPDK
@@ -671,7 +713,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_nat_range2])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_seqadj.h], [nf_ct_seq_adjust])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_count.h], [nf_conncount_gc_list],
-                  [OVS_DEFINE([HAVE_UPSTREAM_NF_CONNCOUNT])])
+                  [OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_count.h],
+                                   [int nf_conncount_add],
+                                   [], [OVS_DEFINE([HAVE_UPSTREAM_NF_CONNCOUNT])])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32])
   OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32_max])
@@ -966,6 +1010,12 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_FIND_PARAM_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_helper.h],
                         [nf_ct_helper_ext_add], [nf_conntrack_helper],
                         [OVS_DEFINE([HAVE_NF_CT_HELPER_EXT_ADD_TAKES_HELPER])])
+  OVS_GREP_IFELSE([$KSRC/include/net/gre.h], [gre_calc_hlen],
+                  [OVS_DEFINE([HAVE_GRE_CALC_HLEN])])
+  OVS_GREP_IFELSE([$KSRC/include/net/gre.h], [ip_gre_calc_hlen],
+                  [OVS_DEFINE([HAVE_IP_GRE_CALC_HLEN])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/rbtree.h], [rb_link_node_rcu],
+                  [OVS_DEFINE([HAVE_RBTREE_RB_LINK_NODE_RCU])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

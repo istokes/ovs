@@ -33,22 +33,20 @@ How the Documentation is Organised
 The Open vSwitch documentation is organised into multiple sections:
 
 - :doc:`Installation guides </intro/install/index>` guide you through
-  installing Open vSwitch (OVS) and Open Virtual Network (OVN) on a variety of
-  different platforms
+  installing Open vSwitch (OVS) on a variety of different platforms
 - :doc:`Tutorials </tutorials/index>` take you through a series of steps to
-  configure OVS and OVN in sandboxed environments
-- :doc:`Topic guides </topics/index>` provide a high level overview of OVS and
-  OVN internals and operation
-- :doc:`How-to guides </howto/index>` are recipes or use-cases for OVS and OVN.
+  configure OVS in sandboxed environments
+- :doc:`Topic guides </topics/index>` provide a high level overview of OVS
+  internals and operation
+- :doc:`How-to guides </howto/index>` are recipes or use-cases for OVS.
   They are more advanced than the tutorials.
 - :doc:`Frequently Asked Questions </faq/index>` provide general insight into
-  a variety of topics related to configuration and operation of OVS and OVN.
+  a variety of topics related to configuration and operation of OVS.
 
 First Steps
 -----------
 
-Getting started with Open vSwitch (OVS) or Open Virtual Network (OVN) for Open
-vSwitch? Start here.
+Getting started with Open vSwitch (OVS)? Start here.
 
 - **Overview:** :doc:`intro/what-is-ovs` |
   :doc:`intro/why-ovs`
@@ -59,16 +57,13 @@ vSwitch? Start here.
   :doc:`intro/install/windows` |
   :doc:`intro/install/xenserver` |
   :doc:`intro/install/dpdk` |
+  :doc:`intro/install/afxdp` |
   :doc:`Installation FAQs <faq/releases>`
 
 - **Tutorials:** :doc:`tutorials/faucet` |
   :doc:`tutorials/ovs-advanced` |
-  :doc:`tutorials/ovn-sandbox` |
-  :doc:`tutorials/ovn-openstack` |
   :doc:`tutorials/ovs-conntrack` |
   :doc:`tutorials/ipsec` |
-  :doc:`tutorials/ovn-ipsec` |
-  :doc:`tutorials/ovn-rbac`
 
 Deeper Dive
 -----------
@@ -87,7 +82,7 @@ Deeper Dive
 
 - **Reference Guides:** :doc:`ref/index`
 
-- **Testing** :doc:`topics/testing`
+- **Testing** :doc:`topics/testing` :doc:`topics/fuzzing/index`
 
 - **Packaging:** :doc:`intro/install/debian` |
   :doc:`intro/install/rhel` |
