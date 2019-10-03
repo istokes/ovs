@@ -28,7 +28,9 @@ addons:
 
 before_install: ./.travis/${TRAVIS_OS_NAME}-prepare.sh
 
-before_script: export PATH=$PATH:$HOME/bin
+before_script:
+  - export PATH=$PATH:$HOME/bin
+  - export DPDK_VER=refs/heads/master
 
 env:
   - OPTS="--disable-ssl"
