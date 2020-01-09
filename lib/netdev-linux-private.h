@@ -37,10 +37,14 @@
 
 struct netdev;
 
+#define LINUX_RXQ_TSO_MAX_LEN 65536
+
 struct netdev_rxq_linux {
     struct netdev_rxq up;
     bool is_tap;
     int fd;
+    char *bufaux;          /* Extra buffer to recv TSO pkt. */
+    int bufaux_len;        /* Extra buffer length. */
 };
 
 int netdev_linux_construct(struct netdev *);

@@ -782,6 +782,52 @@ netdev_get_pt_mode(const struct netdev *netdev)
             : NETDEV_PT_LEGACY_L2);
 }
 
+/* Check if a 'packet' is compatible with 'netdev_flags'.
+ * If a packet is incompatible, return 'false' with the 'errormsg'
+ * pointing to a reason. */
+static bool
+netdev_send_prepare_packet(const uint64_t netdev_flags,
+                           struct dp_packet *packet, char **errormsg)
+{
+    if (dp_packet_hwol_is_tso(packet)
+        && !(netdev_flags & NETDEV_TX_OFFLOAD_TCP_TSO)) {
+            /* Fall back to GSO in software. */
+            *errormsg = "No TSO support";
+            return false;
+    }
+
+    if (dp_packet_hwol_l4_mask(packet)
+        && !(netdev_flags & NETDEV_TX_OFFLOAD_TCP_CKSUM)) {
+            /* Fall back to L4 csum in software. */
+            *errormsg = "No L4 checksum support";
+            return false;
+    }
+
+    return true;
+}
+
+/* Check if each packet in 'batch' is compatible with 'netdev' features,
+ * otherwise either fall back to software implementation or drop it. */
+static void
+netdev_send_prepare_batch(const struct netdev *netdev,
+                          struct dp_packet_batch *batch)
+{
+    struct dp_packet *packet;
+    size_t i, size = dp_packet_batch_size(batch);
+
+    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
+        char *errormsg = NULL;
+
+        if (netdev_send_prepare_packet(netdev->ol_flags, packet, &errormsg)) {
+            dp_packet_batch_refill(batch, packet, i);
+        } else {
+            VLOG_WARN_RL(&rl, "%s: Packet dropped: %s",
+                         errormsg ? errormsg : "Unsupported feature",
+                         netdev_get_name(netdev));
+        }
+    }
+}
+
 /* Sends 'batch' on 'netdev'.  Returns 0 if successful (for every packet),
  * otherwise a positive errno value.  Returns EAGAIN without blocking if
  * at least one the packets cannot be queued immediately.  Returns EMSGSIZE
@@ -811,8 +857,10 @@ int
 netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
             bool concurrent_txq)
 {
-    int error = netdev->netdev_class->send(netdev, qid, batch,
-                                           concurrent_txq);
+    int error;
+
+    netdev_send_prepare_batch(netdev, batch);
+    error = netdev->netdev_class->send(netdev, qid, batch, concurrent_txq);
     if (!error) {
         COVERAGE_INC(netdev_sent);
     }
@@ -878,9 +926,17 @@ netdev_push_header(const struct netdev *netdev,
                    const struct ovs_action_push_tnl *data)
 {
     struct dp_packet *packet;
-    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
-        netdev->netdev_class->push_header(netdev, packet, data);
-        pkt_metadata_init(&packet->md, data->out_port);
+    size_t i, size = dp_packet_batch_size(batch);
+
+    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
+        if (!dp_packet_hwol_is_tso(packet)) {
+            netdev->netdev_class->push_header(netdev, packet, data);
+            pkt_metadata_init(&packet->md, data->out_port);
+            dp_packet_batch_refill(batch, packet, i);
+        } else {
+            VLOG_WARN_RL(&rl, "%s: Tunneling of TSO packet is not supported: "
+                         "packet dropped", netdev_get_name(netdev));
+        }
     }
 
     return 0;

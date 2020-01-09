@@ -35,6 +35,7 @@ DOC_SOURCE = \
 	Documentation/topics/dpdk/index.rst \
 	Documentation/topics/dpdk/bridge.rst \
 	Documentation/topics/dpdk/jumbo-frames.rst \
+	Documentation/topics/dpdk/tso.rst \
 	Documentation/topics/dpdk/memory.rst \
 	Documentation/topics/dpdk/pdump.rst \
 	Documentation/topics/dpdk/phy.rst \

@@ -26,6 +26,7 @@ Post-v2.12.0
      * DPDK ring ports (dpdkr) are deprecated and will be removed in next
        releases.
      * Add support for DPDK 19.11.
+     * Add experimental support for TSO.
    - RSTP:
      * The rstp_statistics column in Port table will only be updated every
        stats-update-interval configured in Open_vSwtich table.

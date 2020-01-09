@@ -690,6 +690,18 @@
          once in few hours or a day or a week.
         </p>
       </column>
+      <column name="other_config" key="tso-support"
+              type='{"type": "boolean"}'>
+        <p>
+          Set this value to <code>true</code> to enable support for TSO (TCP
+          Segmentation Offloading). When TSO is enabled, vhost-user client
+          interfaces can transmit packets up to 64KB.
+        </p>
+        <p>
+          The default value is <code>false</code>. Changing this value requires
+          restarting the daemon.
+        </p>
+      </column>
     </group>
     <group title="Status">
       <column name="next_cfg">

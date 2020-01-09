@@ -114,6 +114,8 @@ static inline void dp_packet_set_size(struct dp_packet *, uint32_t);
 static inline uint16_t dp_packet_get_allocated(const struct dp_packet *);
 static inline void dp_packet_set_allocated(struct dp_packet *, uint16_t);
 
+void dp_packet_prepend_vnet_hdr(struct dp_packet *, int mtu);
+
 void *dp_packet_resize_l2(struct dp_packet *, int increment);
 void *dp_packet_resize_l2_5(struct dp_packet *, int increment);
 static inline void *dp_packet_eth(const struct dp_packet *);
@@ -456,7 +458,7 @@ dp_packet_init_specific(struct dp_packet *p)
 {
     /* This initialization is needed for packets that do not come from DPDK
      * interfaces, when vswitchd is built with --with-dpdk. */
-    p->mbuf.tx_offload = p->mbuf.packet_type = 0;
+    p->mbuf.ol_flags = p->mbuf.tx_offload = p->mbuf.packet_type = 0;
     p->mbuf.nb_segs = 1;
     p->mbuf.next = NULL;
 }
@@ -517,6 +519,80 @@ static inline void
 dp_packet_set_allocated(struct dp_packet *b, uint16_t s)
 {
     b->mbuf.buf_len = s;
+}
+
+static inline bool
+dp_packet_hwol_is_tso(const struct dp_packet *b)
+{
+    return (b->mbuf.ol_flags & (PKT_TX_TCP_SEG | PKT_TX_L4_MASK))
+           ? true
+           : false;
+}
+
+static inline bool
+dp_packet_hwol_is_ipv4(const struct dp_packet *b)
+{
+    return b->mbuf.ol_flags & PKT_TX_IPV4 ? true : false;
+}
+
+static inline uint64_t
+dp_packet_hwol_l4_mask(const struct dp_packet *b)
+{
+    return b->mbuf.ol_flags & PKT_TX_L4_MASK;
+}
+
+static inline bool
+dp_packet_hwol_l4_is_tcp(const struct dp_packet *b)
+{
+    return (b->mbuf.ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM
+           ? true
+           : false;
+}
+
+static inline bool
+dp_packet_hwol_l4_is_udp(struct dp_packet *b)
+{
+    return (b->mbuf.ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM
+           ? true
+           : false;
+}
+
+static inline bool
+dp_packet_hwol_l4_is_sctp(struct dp_packet *b)
+{
+    return (b->mbuf.ol_flags & PKT_TX_L4_MASK) == PKT_TX_SCTP_CKSUM
+           ? true
+           : false;
+}
+
+static inline void
+dp_packet_hwol_set_tx_ipv4(struct dp_packet *b) {
+    b->mbuf.ol_flags |= PKT_TX_IPV4;
+}
+
+static inline void
+dp_packet_hwol_set_tx_ipv6(struct dp_packet *b) {
+    b->mbuf.ol_flags |= PKT_TX_IPV6;
+}
+
+static inline void
+dp_packet_hwol_set_csum_tcp(struct dp_packet *b) {
+    b->mbuf.ol_flags |= PKT_TX_TCP_CKSUM;
+}
+
+static inline void
+dp_packet_hwol_set_csum_udp(struct dp_packet *b) {
+    b->mbuf.ol_flags |= PKT_TX_UDP_CKSUM;
+}
+
+static inline void
+dp_packet_hwol_set_csum_sctp(struct dp_packet *b) {
+    b->mbuf.ol_flags |= PKT_TX_SCTP_CKSUM;
+}
+
+static inline void
+dp_packet_hwol_set_tcp_seg(struct dp_packet *b) {
+    b->mbuf.ol_flags |= PKT_TX_TCP_SEG;
 }
 
 /* Returns the RSS hash of the packet 'p'.  Note that the returned value is
@@ -646,6 +722,66 @@ static inline void
 dp_packet_set_allocated(struct dp_packet *b, uint16_t s)
 {
     b->allocated_ = s;
+}
+
+static inline bool
+dp_packet_hwol_is_tso(const struct dp_packet *b OVS_UNUSED)
+{
+    return false;
+}
+
+static inline bool
+dp_packet_hwol_is_ipv4(const struct dp_packet *b OVS_UNUSED)
+{
+    return false;
+}
+
+static inline uint64_t
+dp_packet_hwol_l4_mask(const struct dp_packet *b OVS_UNUSED)
+{
+    return 0;
+}
+
+static inline bool
+dp_packet_hwol_l4_is_tcp(const struct dp_packet *b OVS_UNUSED)
+{
+    return false;
+}
+
+static inline bool
+dp_packet_hwol_l4_is_udp(const struct dp_packet *b OVS_UNUSED)
+{
+    return false;
+}
+
+static inline bool
+dp_packet_hwol_l4_is_sctp(const struct dp_packet *b OVS_UNUSED)
+{
+    return false;
+}
+
+static inline void
+dp_packet_hwol_set_tx_ipv4(struct dp_packet *b OVS_UNUSED) {
+}
+
+static inline void
+dp_packet_hwol_set_tx_ipv6(struct dp_packet *b OVS_UNUSED) {
+}
+
+static inline void
+dp_packet_hwol_set_csum_tcp(struct dp_packet *b OVS_UNUSED) {
+}
+
+static inline void
+dp_packet_hwol_set_csum_udp(struct dp_packet *b OVS_UNUSED) {
+}
+
+static inline void
+dp_packet_hwol_set_csum_sctp(struct dp_packet *b OVS_UNUSED) {
+}
+
+static inline void
+dp_packet_hwol_set_tcp_seg(struct dp_packet *b OVS_UNUSED) {
 }
 
 /* Returns the RSS hash of the packet 'p'.  Note that the returned value is
@@ -937,6 +1073,20 @@ dp_packet_batch_reset_cutlen(struct dp_packet_batch *batch)
         }
         batch->trunc = false;
     }
+}
+
+static inline bool
+dp_packet_hwol_tx_ip_checksum(const struct dp_packet *p)
+{
+
+    return dp_packet_hwol_l4_mask(p) ? true : false;
+}
+
+static inline bool
+dp_packet_hwol_tx_l4_checksum(const struct dp_packet *p)
+{
+
+    return dp_packet_hwol_l4_mask(p) ? true : false;
 }
 
 #ifdef  __cplusplus
