@@ -173,6 +173,9 @@ if [ "$DPDK" ] || [ "$DPDK_SHARED" ]; then
         # Disregard cast alignment errors until DPDK is fixed
         CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} -Wno-cast-align"
     fi
+    if [ -n "$DPDK_EXPERIMENTAL" ]; then
+        CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} -DALLOW_EXPERIMENTAL_API"
+    fi
 fi
 
 if [ "$CC" = "clang" ]; then
