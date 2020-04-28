@@ -129,10 +129,6 @@ function install_dpdk()
         export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/$TARGET/lib
     fi
 
-    # Disable building DPDK kernel modules. Not needed for OVS build or tests.
-    sed -i '/CONFIG_RTE_EAL_IGB_UIO=y/s/=y/=n/' build/.config
-    sed -i '/CONFIG_RTE_KNI_KMOD=y/s/=y/=n/' build/.config
-
     make -j4 CC=gcc EXTRA_CFLAGS='-fPIC'
     EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=$(pwd)/build"
     echo "Installed DPDK source in $(pwd)"
