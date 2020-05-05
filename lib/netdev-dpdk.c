@@ -39,6 +39,8 @@
 #include <rte_version.h>
 #include <rte_vhost.h>
 
+#include <rte_ethdev_driver.h>
+
 #include "cmap.h"
 #include "coverage.h"
 #include "dirs.h"
@@ -956,7 +958,10 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
     struct rte_eth_conf conf = port_conf;
     struct rte_eth_dev_info info;
     uint16_t conf_mtu;
+    uint16_t test_exp;
+    test_exp = 99;
 
+    rte_eth_switch_domain_free(test_exp);
     rte_eth_dev_info_get(dev->port_id, &info);
 
     /* As of DPDK 17.11.1 a few PMDs require to explicitly enable
