@@ -21,6 +21,6 @@
 #define __ATOMIC_ACQUIRE 0
 #define __atomic_load_n(p, memorder) *(p)
 
-/* Get actual <rte_trace_point_provider.h> definitions for us to annotate and
+/* Get actual <rte_trace_point.h> definitions for us to annotate and
  * build on. */
-#include_next <rte_trace_point_provider.h>
+#include_next <rte_trace_point.h>
