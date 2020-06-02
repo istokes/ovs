@@ -2390,8 +2390,12 @@ push_dp_ops(struct udpif *udpif, struct ukey_op *ops, size_t n_ops)
             transition_ukey(op->ukey, UKEY_EVICTED);
             push->used = MAX(stats->used, op->ukey->stats.used);
             push->tcp_flags = stats->tcp_flags | op->ukey->stats.tcp_flags;
-            push->n_packets = stats->n_packets - op->ukey->stats.n_packets;
-            push->n_bytes = stats->n_bytes - op->ukey->stats.n_bytes;
+            push->n_packets = (stats->n_packets > op->ukey->stats.n_packets
+                               ? stats->n_packets - op->ukey->stats.n_packets
+                               : 0);
+            push->n_bytes = (stats->n_bytes > op->ukey->stats.n_bytes
+                             ? stats->n_bytes - op->ukey->stats.n_bytes
+                             : 0);
             ovs_mutex_unlock(&op->ukey->mutex);
         } else {
             push = stats;
