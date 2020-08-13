@@ -672,10 +672,24 @@ free_flow_actions(struct flow_actions *actions)
     actions->cnt = 0;
 }
 
+/*
+* This is a temporary work around to fix ethernet pattern for partial hardware
+* offload for X710 devices. This fix will be reverted once the issue is fixed
+* within the i40e PMD driver.
+*/
+#define NULL_ETH_MASK_IF_ZEROS \
+    if (eth_mask && is_all_zeros(&eth_mask->src, sizeof eth_mask->src) && \
+        is_all_zeros(&eth_mask->dst, sizeof eth_mask->dst)) { \
+        patterns->items[0].mask = NULL; \
+        free(eth_mask); \
+    }
+
 static int
 parse_flow_match(struct flow_patterns *patterns,
                  struct match *match)
 {
+    struct rte_flow_item_eth *eth_mask = NULL;
+    struct rte_flow_item_eth *eth_spec = NULL;
     uint8_t *next_proto_mask = NULL;
     struct flow *consumed_masks;
     uint8_t proto = 0;
@@ -694,24 +708,23 @@ parse_flow_match(struct flow_patterns *patterns,
     if (match->wc.masks.dl_type ||
         !eth_addr_is_zero(match->wc.masks.dl_src) ||
         !eth_addr_is_zero(match->wc.masks.dl_dst)) {
-        struct rte_flow_item_eth *spec, *mask;
 
-        spec = xzalloc(sizeof *spec);
-        mask = xzalloc(sizeof *mask);
+        eth_spec = xzalloc(sizeof *eth_spec);
+        eth_mask = xzalloc(sizeof *eth_mask);
 
-        memcpy(&spec->dst, &match->flow.dl_dst, sizeof spec->dst);
-        memcpy(&spec->src, &match->flow.dl_src, sizeof spec->src);
-        spec->type = match->flow.dl_type;
+        memcpy(&eth_spec->dst, &match->flow.dl_dst, sizeof eth_spec->dst);
+        memcpy(&eth_spec->src, &match->flow.dl_src, sizeof eth_spec->src);
+        eth_spec->type = match->flow.dl_type;
 
-        memcpy(&mask->dst, &match->wc.masks.dl_dst, sizeof mask->dst);
-        memcpy(&mask->src, &match->wc.masks.dl_src, sizeof mask->src);
-        mask->type = match->wc.masks.dl_type;
+        memcpy(&eth_mask->dst, &match->wc.masks.dl_dst, sizeof eth_mask->dst);
+        memcpy(&eth_mask->src, &match->wc.masks.dl_src, sizeof eth_mask->src);
+        eth_mask->type = match->wc.masks.dl_type;
 
         memset(&consumed_masks->dl_dst, 0, sizeof consumed_masks->dl_dst);
         memset(&consumed_masks->dl_src, 0, sizeof consumed_masks->dl_src);
         consumed_masks->dl_type = 0;
 
-        add_flow_pattern(patterns, RTE_FLOW_ITEM_TYPE_ETH, spec, mask);
+        add_flow_pattern(patterns, RTE_FLOW_ITEM_TYPE_ETH, eth_spec, eth_mask);
     }
 
     /* VLAN */
@@ -738,6 +751,7 @@ parse_flow_match(struct flow_patterns *patterns,
     /* IP v4 */
     if (match->flow.dl_type == htons(ETH_TYPE_IP)) {
         struct rte_flow_item_ipv4 *spec, *mask;
+        NULL_ETH_MASK_IF_ZEROS;
 
         spec = xzalloc(sizeof *spec);
         mask = xzalloc(sizeof *mask);
@@ -776,6 +790,7 @@ parse_flow_match(struct flow_patterns *patterns,
     /* IP v6 */
     if (match->flow.dl_type == htons(ETH_TYPE_IPV6)) {
         struct rte_flow_item_ipv6 *spec, *mask;
+        NULL_ETH_MASK_IF_ZEROS;
 
         spec = xzalloc(sizeof *spec);
         mask = xzalloc(sizeof *mask);
