@@ -696,16 +696,28 @@ parse_flow_match(struct flow_patterns *patterns,
         !eth_addr_is_zero(match->wc.masks.dl_dst)) {
         struct rte_flow_item_eth *spec, *mask;
 
-        spec = xzalloc(sizeof *spec);
-        mask = xzalloc(sizeof *mask);
+        /*
+         * This is a temporary work around to fix ethernet pattern for partial
+         * hardware offload for X710 devices. This fix will be reverted once
+         * the issue is fixed within the i40e PMD driver.
+         */
+        if (match->wc.masks.dl_type == htons(0xFFFF) && is_ip_any(&match->flow)
+            && eth_addr_is_zero(match->wc.masks.dl_dst)
+            && eth_addr_is_zero(match->wc.masks.dl_src)) {
+            spec = NULL;
+            mask = NULL;
+        } else {
+            spec = xzalloc(sizeof *spec);
+            mask = xzalloc(sizeof *mask);
 
-        memcpy(&spec->dst, &match->flow.dl_dst, sizeof spec->dst);
-        memcpy(&spec->src, &match->flow.dl_src, sizeof spec->src);
-        spec->type = match->flow.dl_type;
+            memcpy(&spec->dst, &match->flow.dl_dst, sizeof spec->dst);
+            memcpy(&spec->src, &match->flow.dl_src, sizeof spec->src);
+            spec->type = match->flow.dl_type;
 
-        memcpy(&mask->dst, &match->wc.masks.dl_dst, sizeof mask->dst);
-        memcpy(&mask->src, &match->wc.masks.dl_src, sizeof mask->src);
-        mask->type = match->wc.masks.dl_type;
+            memcpy(&mask->dst, &match->wc.masks.dl_dst, sizeof mask->dst);
+            memcpy(&mask->src, &match->wc.masks.dl_src, sizeof mask->src);
+            mask->type = match->wc.masks.dl_type;
+        }
 
         memset(&consumed_masks->dl_dst, 0, sizeof consumed_masks->dl_dst);
         memset(&consumed_masks->dl_src, 0, sizeof consumed_masks->dl_src);
