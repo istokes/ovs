@@ -87,16 +87,28 @@ function install_dpdk()
 {
     local DPDK_VER=$1
     local VERSION_FILE="dpdk-dir/travis-dpdk-cache-version"
+    local DPDK_OPTS=""
+    local DPDK_LIB=""
 
     if [ -z "$TRAVIS_ARCH" ] ||
        [ "$TRAVIS_ARCH" == "amd64" ]; then
-        TARGET="x86_64-native-linuxapp-gcc"
+        DPDK_LIB=$(pwd)/dpdk-dir/build/lib/x86_64-linux-gnu
     elif [ "$TRAVIS_ARCH" == "aarch64" ]; then
-        TARGET="arm64-armv8a-linuxapp-gcc"
+        DPDK_LIB=$(pwd)/dpdk-dir/build/lib/aarch64-linux-gnu
     else
         echo "Target is unknown"
         exit 1
     fi
+
+    if [ "$DPDK_SHARED" ]; then
+        EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=shared"
+        export LD_LIBRARY_PATH=$DPDK_LIB/:$LD_LIBRARY_PATH
+    else
+        EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=static"
+    fi
+
+    # Export the following path for pkg-config to find the .pc file.
+    export PKG_CONFIG_PATH=$DPDK_LIB/pkgconfig/:$PKG_CONFIG_PATH
 
     if [ "${DPDK_VER##refs/*/}" != "${DPDK_VER}" ]; then
         # Avoid using cache for git tree build.
@@ -110,7 +122,8 @@ function install_dpdk()
         if [ -f "${VERSION_FILE}" ]; then
             VER=$(cat ${VERSION_FILE})
             if [ "${VER}" = "${DPDK_VER}" ]; then
-                EXTRA_OPTS="${EXTRA_OPTS} --with-dpdk=$(pwd)/dpdk-dir/build"
+                # Update the library paths.
+                sudo ldconfig
                 echo "Found cached DPDK ${VER} build in $(pwd)/dpdk-dir"
                 return
             fi
@@ -124,16 +137,20 @@ function install_dpdk()
         pushd dpdk-dir
     fi
 
-    make config CC=gcc T=$TARGET
+    # Disable building DPDK unit tests. Not needed for OVS build or tests.
+    DPDK_OPTS="$DPDK_OPTS -Dtests=false"
 
-    if [ "$DPDK_SHARED" ]; then
-        sed -i '/CONFIG_RTE_BUILD_SHARED_LIB=n/s/=n/=y/' build/.config
-        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/$TARGET/lib
-    fi
+    # Install DPDK using prefix.
+    DPDK_OPTS="$DPDK_OPTS --prefix=$(pwd)/build"
 
-    make -j4 CC=gcc EXTRA_CFLAGS='-fPIC'
-    EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=$(pwd)/build"
-    echo "Installed DPDK source in $(pwd)"
+    CC=gcc meson $DPDK_OPTS build
+    ninja -C build
+    sudo ninja -C build install
+
+    # Update the library paths.
+    sudo ldconfig
+
+    echo "Installed DPDK source"
     popd
     echo "${DPDK_VER}" > ${VERSION_FILE}
 }
