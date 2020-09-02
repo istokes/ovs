@@ -1,5 +1,7 @@
 Post-v2.14.0
 ---------------------
+   - DPDK:
+     * Deprecated vhost-user dequeue zero-copy support removed.
 
 
 v2.14.0 - 17 Aug 2020
