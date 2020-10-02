@@ -42,7 +42,7 @@ Installing OVS and IPsec Packages
 ---------------------------------
 
 OVS IPsec has .deb and .rpm packages. You should use the right package
-based on your Linux distribution. This tutorial uses Ubuntu 16.04 and Fedora 27
+based on your Linux distribution. This tutorial uses Ubuntu 16.04 and Fedora 32
 as examples.
 
 Ubuntu
@@ -71,21 +71,18 @@ Ubuntu
 Fedora
 ~~~~~~
 
-1. Follow :doc:`/intro/install/fedora` to build RPM packages.
+1. Install the related packages. Fedora 32 does not require installation of
+   the out-of-tree kernel module::
 
-2. Install the related packages::
+       $ dnf install python3-openvswitch libreswan \
+                     openvswitch openvswitch-ipsec
 
-       $ dnf install python2-openvswitch libreswan \
-                     "kernel-devel-uname-r == $(uname -r)"
-       $ rpm -i openvswitch-*.rpm openvswitch-kmod-*.rpm \
-                openvswitch-openvswitch-ipsec-*.rpm
+2. Install firewall rules to allow ESP and IKE traffic::
 
-3. Install firewall rules to allow ESP and IKE traffic::
+       $ iptables -A INPUT -p esp -j ACCEPT
+       $ iptables -A INPUT -p udp --dport 500 -j ACCEPT
 
-       $ iptables -A IN_FedoraServer_allow -p esp -j ACCEPT
-       $ iptables -A IN_FedoraServer_allow -p udp --dport 500 -j ACCEPT
-
-4. Run the openvswitch-ipsec service::
+3. Run the openvswitch-ipsec service::
 
        $ systemctl start openvswitch-ipsec.service
 
@@ -97,7 +94,7 @@ Fedora
 Configuring IPsec tunnel
 ------------------------
 
-Suppose you want to build IPsec tunnel between two hosts. Assume `host_1`'s
+Suppose you want to build an IPsec tunnel between two hosts. Assume `host_1`'s
 external IP is 1.1.1.1, and `host_2`'s external IP is 2.2.2.2. Make sure
 `host_1` and `host_2` can ping each other via these external IPs.
 
@@ -123,8 +120,8 @@ external IP is 1.1.1.1, and `host_2`'s external IP is 2.2.2.2. Make sure
 
 2. Set up IPsec tunnel.
 
-   There are three authentication methods. You can choose one to set up your
-   IPsec tunnel.
+   There are three authentication methods.  Choose one method to set up your
+   IPsec tunnel and follow the steps below.
 
    a) Using pre-shared key:
 
