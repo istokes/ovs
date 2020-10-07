@@ -10,6 +10,7 @@ v2.12.1 - 30 Jul 2020
        CVE-2019-14818, CVE-2020-10722, CVE-2020-10723 and CVE-2020-10724
        over the course of various LTS releases, this DPDK version is strongly
        recommended to be used.
+     * Fixed support of 'net_virtio' devices.
 
 v2.12.0 - 03 Sep 2019
 ---------------------
