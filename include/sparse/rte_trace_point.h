@@ -18,8 +18,10 @@
 #endif
 
 /* sparse doesn't know about gcc atomic builtins. */
+#ifndef __ATOMIC_ACQUIRE
 #define __ATOMIC_ACQUIRE 0
 #define __atomic_load_n(p, memorder) *(p)
+#endif
 
 /* Get actual <rte_trace_point.h> definitions for us to annotate and
  * build on. */
