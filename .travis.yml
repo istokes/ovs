@@ -27,10 +27,14 @@ addons:
       - selinux-policy-dev
       - libunbound-dev
       - libunwind-dev
+      - python3-setuptools
+      - python3-wheel
+      - ninja-build
 
 before_install: ./.travis/${TRAVIS_OS_NAME}-prepare.sh
 
-before_script: export PATH=$PATH:$HOME/bin
+before_script:
+  - export PATH=$PATH:$HOME/bin
 
 env:
   - OPTS="--disable-ssl"
