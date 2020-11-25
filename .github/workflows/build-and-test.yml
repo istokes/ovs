@@ -8,7 +8,8 @@ jobs:
       dependencies: |
         automake libtool gcc bc libjemalloc1 libjemalloc-dev    \
         libssl-dev llvm-dev libelf-dev libnuma-dev libpcap-dev  \
-        python3-openssl python3-pip python3-sphinx              \
+        ninja-build python3-openssl python3-pip                 \
+        python3-setuptools python3-sphinx python3-wheel         \
         selinux-policy-dev
       deb_dependencies: |
         linux-headers-$(uname -r) build-essential fakeroot devscripts equivs
@@ -143,10 +144,13 @@ jobs:
       run:  sudo apt install -y libunbound-dev libunwind-dev
 
     - name: prepare
-      run:  ./.ci/linux-prepare.sh
+      run:  |
+        ./.ci/linux-prepare.sh
+        # Workaround on $HOME permissions as EAL checks them for plugin loading
+        chmod o-w $HOME
 
     - name: build
-      run:  PATH="$PATH:$HOME/bin" ./.ci/linux-build.sh
+      run:  PATH="$PATH:$HOME/bin:$HOME/.local/bin" ./.ci/linux-build.sh
 
     - name: upload deb packages
       if:   matrix.deb_package != ''
