@@ -399,6 +399,11 @@ Supported actions for hardware offload are:
 - Modification of IPv6 (set_field:<ADDR>->ipv6_src/ipv6_dst/mod_nw_ttl).
 - Clone/output (tnl_push and output) for encapsulating over a tunnel.
 
+Multiprocess
+------------
+
+This DPDK feature is not supported and disabled during OVS initialization.
+
 Further Reading
 ---------------
 

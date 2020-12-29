@@ -39,7 +39,13 @@ dpdk_init(const struct smap *ovs_other_config)
 }
 
 void
-dpdk_set_lcore_id(unsigned cpu OVS_UNUSED)
+dpdk_init_thread_context(unsigned cpu OVS_UNUSED)
+{
+    /* Nothing */
+}
+
+void
+dpdk_uninit_thread_context(void)
 {
     /* Nothing */
 }

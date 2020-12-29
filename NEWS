@@ -12,6 +12,8 @@ Post-v2.14.0
    - DPDK:
      * Removed support for vhost-user dequeue zero-copy.
      * Add support for DPDK 20.11.
+     * Forbid use of DPDK multiprocess feature.
+     * Add support for running threads on cores > RTE_MAX_LCORE.
    - Userspace datapath:
      * Add the 'pmd' option to "ovs-appctl dpctl/dump-flows", which
        restricts a flow dump to a single PMD thread if set.

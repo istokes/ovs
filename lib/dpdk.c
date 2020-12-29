@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#ifndef ALLOW_EXPERIMENTAL_API
+#define ALLOW_EXPERIMENTAL_API
+#endif
+
 #include <config.h>
 #include "dpdk.h"
 
@@ -502,6 +506,12 @@ dpdk_init__(const struct smap *ovs_other_config)
         return false;
     }
 
+    if (!rte_mp_disable()) {
+        VLOG_EMER("Could not disable multiprocess, DPDK won't be available.");
+        rte_eal_cleanup();
+        return false;
+    }
+
     if (VLOG_IS_DBG_ENABLED()) {
         size_t size;
         char *response = NULL;
@@ -525,6 +535,8 @@ dpdk_init__(const struct smap *ovs_other_config)
                              dpdk_unixctl_mem_stream, rte_log_dump);
     unixctl_command_register("dpdk/log-set", "{level | pattern:level}", 0,
                              INT_MAX, dpdk_unixctl_log_set, NULL);
+    unixctl_command_register("dpdk/lcores-list", "", 0, 0,
+                             dpdk_unixctl_mem_stream, rte_lcore_dump);
 
     /* We are called from the main thread here */
     RTE_PER_LCORE(_lcore_id) = NON_PMD_CORE_ID;
@@ -601,11 +613,37 @@ dpdk_available(void)
 }
 
 void
-dpdk_set_lcore_id(unsigned cpu)
+dpdk_init_thread_context(unsigned cpu)
 {
     /* NON_PMD_CORE_ID is reserved for use by non pmd threads. */
     ovs_assert(cpu != NON_PMD_CORE_ID);
-    RTE_PER_LCORE(_lcore_id) = cpu;
+
+    if (!dpdk_available()) {
+        return;
+    }
+
+    if (rte_thread_register() < 0) {
+        VLOG_WARN("This OVS pmd thread will share resources with the non-pmd "
+                  "thread: %s.", rte_strerror(rte_errno));
+    } else {
+        VLOG_INFO("PMD thread uses DPDK lcore %u.", rte_lcore_id());
+    }
+}
+
+void
+dpdk_uninit_thread_context(void)
+{
+    unsigned int lcore_id;
+
+    if (!dpdk_available()) {
+        return;
+    }
+
+    lcore_id = rte_lcore_id();
+    rte_thread_unregister();
+    if (lcore_id != LCORE_ID_ANY) {
+        VLOG_INFO("PMD thread released DPDK lcore %u.", lcore_id);
+    }
 }
 
 void

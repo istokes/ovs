@@ -5926,7 +5926,7 @@ pmd_thread_main(void *f_)
     /* Stores the pmd thread's 'pmd' to 'per_pmd_key'. */
     ovsthread_setspecific(pmd->dp->per_pmd_key, pmd);
     ovs_numa_thread_setaffinity_core(pmd->core_id);
-    dpdk_set_lcore_id(pmd->core_id);
+    dpdk_init_thread_context(pmd->core_id);
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
     pmd_alloc_static_tx_qid(pmd);
@@ -6061,6 +6061,7 @@ reload:
     dfc_cache_uninit(&pmd->flow_cache);
     free(poll_list);
     pmd_free_cached_ports(pmd);
+    dpdk_uninit_thread_context();
     return NULL;
 }
 
