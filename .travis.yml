@@ -41,6 +41,9 @@ matrix:
       env: TESTSUITE=1 DPDK=1
     - arch: arm64
       compiler: gcc
+      env: DPDK_EXPERIMENTAL=1
+    - arch: arm64
+      compiler: gcc
       env: KERNEL_LIST="5.5 4.19"
     - arch: arm64
       compiler: gcc
