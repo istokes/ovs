@@ -3680,8 +3680,8 @@ netdev_dpdk_get_status(const struct netdev *netdev, struct smap *args)
     ovs_mutex_unlock(&dev->mutex);
     const struct rte_bus *bus;
     const struct rte_pci_device *pci_dev;
-    uint16_t vendor_id = PCI_ANY_ID;
-    uint16_t device_id = PCI_ANY_ID;
+    uint16_t vendor_id = RTE_PCI_ANY_ID;
+    uint16_t device_id = RTE_PCI_ANY_ID;
     bus = rte_bus_find_by_device(dev_info.device);
     if (bus && !strcmp(bus->name, "pci")) {
         pci_dev = RTE_DEV_TO_PCI(dev_info.device);
