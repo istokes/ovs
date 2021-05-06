@@ -30,7 +30,9 @@ addons:
 
 before_install: ./.ci/${TRAVIS_OS_NAME}-prepare.sh
 
-before_script: export PATH=$PATH:$HOME/bin
+before_script:
+  - export PATH=$PATH:$HOME/bin
+  - export DPDK_VER=refs/heads/main
 
 matrix:
   include:
