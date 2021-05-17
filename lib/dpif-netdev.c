@@ -7290,12 +7290,25 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
         pmd->n_output_batches++;
     }
 
-    struct dp_packet *packet;
-    DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
-        p->output_pkts_rxqs[dp_packet_batch_size(&p->output_pkts)] =
-            pmd->ctx.last_rxq;
-        dp_packet_batch_add(&p->output_pkts, packet);
+    /* The above checks ensure that there is enough space in the output batch.
+     * Using dp_packet_batch_add() has a branch to check if the batch is full.
+     * This branch reduces the compiler's ability to optimize efficiently. The
+     * below code implements packet movement between batches without checks,
+     * with the required semantics of output batch perhaps containing packets.
+     */
+    int batch_size = dp_packet_batch_size(packets_);
+    int out_batch_idx = dp_packet_batch_size(&p->output_pkts);
+    struct dp_netdev_rxq *rxq = pmd->ctx.last_rxq;
+    struct dp_packet_batch *output_batch = &p->output_pkts;
+
+    for (int i = 0; i < batch_size; i++) {
+        struct dp_packet *packet = packets_->packets[i];
+        p->output_pkts_rxqs[out_batch_idx] = rxq;
+        output_batch->packets[out_batch_idx] = packet;
+        out_batch_idx++;
     }
+    output_batch->count += batch_size;
+
     return true;
 }
 
