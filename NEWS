@@ -18,6 +18,8 @@ Post-v2.15.0
        CPU supports it. This enhances performance by using the native vpopcount
        instructions, instead of the emulated version of vpopcount.
      * Optimize dp_netdev_output by enhancing compiler optimization potential.
+     * Optimize netdev sending by assuming the happy case, and using fallback
+       for if the netdev doesnt meet the required HWOL needs of a packet.
    - ovs-ctl:
      * New option '--no-record-hostname' to disable hostname configuration
        in ovsdb on startup.

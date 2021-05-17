@@ -837,20 +837,33 @@ static void
 netdev_send_prepare_batch(const struct netdev *netdev,
                           struct dp_packet_batch *batch)
 {
-    struct dp_packet *packet;
-    size_t i, size = dp_packet_batch_size(batch);
+    struct dp_packet *p;
+    uint32_t i, size = dp_packet_batch_size(batch);
+    char *err_msg = NULL;
 
-    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
-        char *errormsg = NULL;
+    for (i = 0; i < size; i++) {
+        p = batch->packets[i];
+        int pkt_ok = netdev_send_prepare_packet(netdev->ol_flags, p, &err_msg);
 
-        if (netdev_send_prepare_packet(netdev->ol_flags, packet, &errormsg)) {
-            dp_packet_batch_refill(batch, packet, i);
+        if (OVS_UNLIKELY(!pkt_ok)) {
+            goto refill_loop;
+        }
+    }
+
+    return;
+
+refill_loop:
+    /* Loop through packets from the start of the batch again. This is the
+     * exceptional case where packets aren't compatible with 'netdev_flags'. */
+    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, p, batch) {
+        if (netdev_send_prepare_packet(netdev->ol_flags, p, &err_msg)) {
+            dp_packet_batch_refill(batch, p, i);
         } else {
-            dp_packet_delete(packet);
+            dp_packet_delete(p);
             COVERAGE_INC(netdev_send_prepare_drops);
             VLOG_WARN_RL(&rl, "%s: Packet dropped: %s",
-                         netdev_get_name(netdev), errormsg);
-            free(errormsg);
+                         netdev_get_name(netdev), err_msg);
+            free(err_msg);
         }
     }
 }
