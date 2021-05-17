@@ -8314,7 +8314,7 @@ dpcls_create_subtable(struct dpcls *cls, const struct netdev_flow_key *mask)
     subtable->mf_bits_set_unit0 = unit0;
     subtable->mf_bits_set_unit1 = unit1;
     subtable->mf_masks = xmalloc(sizeof(uint64_t) * (unit0 + unit1));
-    netdev_flow_key_gen_masks(mask, subtable->mf_masks, unit0, unit1);
+    dpcls_flow_key_gen_masks(mask, subtable->mf_masks, unit0, unit1);
 
     /* Get the preferred subtable search function for this (u0,u1) subtable.
      * The function is guaranteed to always return a valid implementation, and
@@ -8489,11 +8489,10 @@ dpcls_remove(struct dpcls *cls, struct dpcls_rule *rule)
     }
 }
 
-/* Inner loop for mask generation of a unit, see netdev_flow_key_gen_masks. */
+/* Inner loop for mask generation of a unit, see dpcls_flow_key_gen_masks. */
 static inline void
-netdev_flow_key_gen_mask_unit(uint64_t iter,
-                              const uint64_t count,
-                              uint64_t *mf_masks)
+dpcls_flow_key_gen_mask_unit(uint64_t iter, const uint64_t count,
+                             uint64_t *mf_masks)
 {
     int i;
     for (i = 0; i < count; i++) {
@@ -8514,16 +8513,16 @@ netdev_flow_key_gen_mask_unit(uint64_t iter,
  * @param mf_bits_unit0 Number of bits set in unit0 of the miniflow
  */
 void
-netdev_flow_key_gen_masks(const struct netdev_flow_key *tbl,
-                          uint64_t *mf_masks,
-                          const uint32_t mf_bits_u0,
-                          const uint32_t mf_bits_u1)
+dpcls_flow_key_gen_masks(const struct netdev_flow_key *tbl,
+                         uint64_t *mf_masks,
+                         const uint32_t mf_bits_u0,
+                         const uint32_t mf_bits_u1)
 {
     uint64_t iter_u0 = tbl->mf.map.bits[0];
     uint64_t iter_u1 = tbl->mf.map.bits[1];
 
-    netdev_flow_key_gen_mask_unit(iter_u0, mf_bits_u0, &mf_masks[0]);
-    netdev_flow_key_gen_mask_unit(iter_u1, mf_bits_u1, &mf_masks[mf_bits_u0]);
+    dpcls_flow_key_gen_mask_unit(iter_u0, mf_bits_u0, &mf_masks[0]);
+    dpcls_flow_key_gen_mask_unit(iter_u1, mf_bits_u1, &mf_masks[mf_bits_u0]);
 }
 
 /* Returns true if 'target' satisfies 'key' in 'mask', that is, if each 1-bit

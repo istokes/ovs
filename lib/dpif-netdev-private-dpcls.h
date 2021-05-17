@@ -97,10 +97,8 @@ struct dpcls_subtable {
 
 /* Generates a mask for each bit set in the subtable's miniflow. */
 void
-netdev_flow_key_gen_masks(const struct netdev_flow_key *tbl,
-                          uint64_t *mf_masks,
-                          const uint32_t mf_bits_u0,
-                          const uint32_t mf_bits_u1);
+dpcls_flow_key_gen_masks(const struct netdev_flow_key *tbl, uint64_t *mf_masks,
+                         const uint32_t mf_bits_u0, const uint32_t mf_bits_u1);
 
 /* Matches a dpcls rule against the incoming packet in 'target' */
 bool dpcls_rule_matches_key(const struct dpcls_rule *rule,
