@@ -27,6 +27,7 @@
 #include "dpif-netdev-private-dpcls.h"
 #include "dpif-netdev-private-flow.h"
 #include "dpif-netdev-private-thread.h"
+#include "dpif-netdev-private-hwol.h"
 
 #include "dp-packet.h"
 #include "netdev.h"
@@ -112,9 +113,32 @@ dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
         uint32_t i = __builtin_ctz(iter);
         iter = _blsr_u64(iter);
 
-        /* Initialize packet md and do miniflow extract. */
+        /* Get packet pointer from bitmask and packet md. */
         struct dp_packet *packet = packets->packets[i];
         pkt_metadata_init(&packet->md, in_port);
+
+        struct dp_netdev_flow *f = NULL;
+
+        /* Check for partial hardware offload mark. */
+        uint32_t mark;
+        if (dp_packet_has_flow_mark(packet, &mark)) {
+            f = mark_to_flow_find(pmd, mark);
+            if (f) {
+                rules[i] = &f->cr;
+
+                /* This is nasty - instead of using the HWOL provided flow,
+                 * parse the packet data anyway to find the location of the TCP
+                 * header to extract the TCP flags for the rule.
+                 */
+                pkt_meta[i].tcp_flags = parse_tcp_flags(packet);
+
+                pkt_meta[i].bytes = dp_packet_size(packet);
+                hwol_emc_smc_hitmask |= (1 << i);
+                continue;
+            }
+        }
+
+        /* Do miniflow extract into keys. */
         struct netdev_flow_key *key = &keys[i];
         miniflow_extract(packet, &key->mf);
 
@@ -124,8 +148,6 @@ dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
 
         key->len = netdev_flow_key_size(miniflow_n_values(&key->mf));
         key->hash = dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf);
-
-        struct dp_netdev_flow *f = NULL;
 
         if (emc_enabled) {
             f = emc_lookup(&cache->emc_cache, key);
