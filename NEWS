@@ -21,6 +21,7 @@ Post-v2.15.0
    - DPDK:
      * OVS validated with DPDK 20.11.1. It is recommended to use this version
        until further releases.
+     * Cache results for CPU ISA checks, reduces overhead on repeated lookups.
 
 
 v2.15.0 - 15 Feb 2021
