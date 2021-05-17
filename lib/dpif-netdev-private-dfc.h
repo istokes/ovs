@@ -81,6 +81,9 @@ extern "C" {
 #define DEFAULT_EM_FLOW_INSERT_MIN (UINT32_MAX /                     \
                                     DEFAULT_EM_FLOW_INSERT_INV_PROB)
 
+/* Forward declaration for SMC function prototype. */
+struct dp_netdev_pmd_thread;
+
 struct emc_entry {
     struct dp_netdev_flow *flow;
     struct netdev_flow_key key;   /* key.hash used for emc hash value. */
@@ -236,6 +239,11 @@ emc_lookup(struct emc_cache *cache, const struct netdev_flow_key *key)
 
     return NULL;
 }
+
+struct dp_netdev_flow *
+smc_lookup_single(struct dp_netdev_pmd_thread *pmd,
+                  struct dp_packet *packet,
+                  struct netdev_flow_key *key);
 
 #ifdef  __cplusplus
 }
