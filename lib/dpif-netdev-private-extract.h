@@ -136,4 +136,23 @@ dpif_miniflow_extract_set_default(miniflow_extract_func func);
 uint32_t mfex_set_study_pkt_cnt(uint32_t pkt_cmp_count,
                             struct dpif_miniflow_extract_impl *opt);
 
+/* AVX512 MFEX Probe and Implementations functions. */
+#ifdef __x86_64__
+int32_t mfex_avx512_probe(void);
+int32_t mfex_avx512_vbmi_probe(void);
+
+#define DECLARE_AVX512_MFEX_PROTOTYPE(name)                                 \
+    uint32_t                                                                \
+    mfex_avx512_vbmi_##name(struct dp_packet_batch *packets,                \
+                        struct netdev_flow_key *keys, uint32_t keys_size,   \
+                        odp_port_t in_port, void *pmd_handle);              \
+    uint32_t                                                                \
+    mfex_avx512_##name(struct dp_packet_batch *packets,                     \
+                        struct netdev_flow_key *keys, uint32_t keys_size,   \
+                        odp_port_t in_port, void *pmd_handle);
+
+DECLARE_AVX512_MFEX_PROTOTYPE(ip_udp);
+#endif /* __x86_64__ */
+
+
 #endif /* DPIF_NETDEV_AVX512_EXTRACT */
