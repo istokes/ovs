@@ -142,6 +142,11 @@ $(srcdir)/tests/fuzz-regression-list.at: tests/automake.mk
 	    echo "TEST_FUZZ_REGRESSION([$$basename])"; \
 	done > $@.tmp && mv $@.tmp $@
 
+EXTRA_DIST += $(MFEX_AUTOVALIDATOR_TESTS)
+MFEX_AUTOVALIDATOR_TESTS = \
+	tests/pcap/mfex_test \
+	tests/pcap/fuzzy.py
+
 OVSDB_CLUSTER_TESTSUITE_AT = \
 	tests/ovsdb-cluster-testsuite.at \
 	tests/ovsdb-execution.at \
