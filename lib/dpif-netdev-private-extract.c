@@ -60,6 +60,37 @@ static struct dpif_miniflow_extract_impl mfex_impls[] = {
         .extract_func = mfex_avx512_ip_udp,
         .name = "avx512_ipv4_udp",
     },
+    {
+        .probe = mfex_avx512_vbmi_probe,
+        .extract_func = mfex_avx512_vbmi_ip_tcp,
+        .name = "avx512_vbmi_ipv4_tcp",
+    },
+    {
+        .probe = mfex_avx512_probe,
+        .extract_func = mfex_avx512_ip_tcp,
+        .name = "avx512_ipv4_tcp",
+    },
+
+    {
+        .probe = mfex_avx512_vbmi_probe,
+        .extract_func = mfex_avx512_vbmi_dot1q_ip_udp,
+        .name = "avx512_vbmi_dot1q_ipv4_udp",
+    },
+    {
+        .probe = mfex_avx512_probe,
+        .extract_func = mfex_avx512_dot1q_ip_udp,
+        .name = "avx512_dot1q_ipv4_udp",
+    },
+    {
+        .probe = mfex_avx512_vbmi_probe,
+        .extract_func = mfex_avx512_vbmi_dot1q_ip_tcp,
+        .name = "avx512_vbmi_dot1q_ipv4_tcp",
+    },
+    {
+        .probe = mfex_avx512_probe,
+        .extract_func = mfex_avx512_dot1q_ip_tcp,
+        .name = "avx512_dot1q_ipv4_tcp",
+    },
 #endif
 };
 

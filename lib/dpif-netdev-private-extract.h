@@ -152,6 +152,10 @@ int32_t mfex_avx512_vbmi_probe(void);
                         odp_port_t in_port, void *pmd_handle);
 
 DECLARE_AVX512_MFEX_PROTOTYPE(ip_udp);
+DECLARE_AVX512_MFEX_PROTOTYPE(ip_tcp);
+DECLARE_AVX512_MFEX_PROTOTYPE(dot1q_ip_udp);
+DECLARE_AVX512_MFEX_PROTOTYPE(dot1q_ip_tcp);
+
 #endif /* __x86_64__ */
 
 
