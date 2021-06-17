@@ -1181,8 +1181,8 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
     struct ds reply = DS_EMPTY_INITIALIZER;
     ds_put_format(&reply, "Miniflow implementation set to %s.\n", mfex_name);
     const char *reply_str = ds_cstr(&reply);
-    unixctl_command_reply(conn, reply_str);
     VLOG_INFO("%s", reply_str);
+    unixctl_command_reply(conn, reply_str);
     ds_destroy(&reply);
 }
 

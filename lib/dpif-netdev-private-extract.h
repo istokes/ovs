@@ -24,6 +24,11 @@
 /* Max size of dpif_miniflow_extract_impl array. */
 #define MFEX_IMPLS_MAX_SIZE (16)
 
+/* Skip the autovalidator study and null when iterating all available
+ * miniflow implementations.
+ */
+#define MFEX_IMPL_START_IDX (1)
+
 /* Forward declarations. */
 struct dp_packet;
 struct miniflow;
@@ -90,5 +95,15 @@ dpif_miniflow_extract_init(void);
 int32_t
 dpif_miniflow_extract_info_get(struct dpif_miniflow_extract_impl **out_ptr);
 
+/* Retrieve the hitmask of the batch of pakcets which is obtained by comparing
+ * different miniflow implementations with linear miniflow extract.
+ * On error, returns a zero.
+ * On success, returns the number of packets in the batch compared.
+ */
+uint32_t
+dpif_miniflow_extract_autovalidator(struct dp_packet_batch *batch,
+                                    struct netdev_flow_key *keys,
+                                    uint32_t keys_size, odp_port_t in_port,
+                                    void *pmd_handle);
 
 #endif /* DPIF_NETDEV_AVX512_EXTRACT */
