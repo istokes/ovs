@@ -992,6 +992,27 @@ dpif_netdev_subtable_lookup_set(struct unixctl_conn *conn, int argc,
 }
 
 static void
+dpif_netdev_impl_get(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                     const char *argv[] OVS_UNUSED, void *aux OVS_UNUSED)
+{
+    const struct dpif_netdev_impl_info_t *dpif_impls;
+    uint32_t count = dp_netdev_impl_get(&dpif_impls);
+    if (count == 0) {
+        unixctl_command_reply_error(conn, "error getting dpif names");
+        return;
+    }
+
+    /* Add all dpif functions to reply string. */
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&reply, "Available DPIF implementations:\n");
+    for (uint32_t i = 0; i < count; i++) {
+        ds_put_format(&reply, "  %s\n", dpif_impls[i].name);
+    }
+    unixctl_command_reply(conn, ds_cstr(&reply));
+    ds_destroy(&reply);
+}
+
+static void
 dpif_netdev_impl_set(struct unixctl_conn *conn, int argc,
                      const char *argv[], void *aux OVS_UNUSED)
 {
@@ -1291,6 +1312,9 @@ dpif_netdev_init(void)
     unixctl_command_register("dpif-netdev/dpif-set",
                              "dpif_implementation_name [dp]",
                              1, 2, dpif_netdev_impl_set,
+                             NULL);
+    unixctl_command_register("dpif-netdev/dpif-get", "",
+                             0, 0, dpif_netdev_impl_get,
                              NULL);
     return 0;
 }

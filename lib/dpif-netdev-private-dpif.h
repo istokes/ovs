@@ -48,6 +48,12 @@ struct dpif_netdev_impl_info_t {
     const char *name;
 };
 
+/* This function returns all available implementations to the caller. The
+ * quantity of implementations is returned by the int return value.
+ */
+uint32_t
+dp_netdev_impl_get(const struct dpif_netdev_impl_info_t **out_impls);
+
 /* This function checks all available DPIF implementations, and selects the
  * returns the function pointer to the one requested by "name".
  */
