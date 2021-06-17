@@ -31,4 +31,29 @@
 #include "dpif-netdev-private-dfc.h"
 #include "dpif-netdev-private-thread.h"
 
+/* Allow other implementations to lookup the DPCLS instances. */
+struct dpcls *
+dp_netdev_pmd_lookup_dpcls(struct dp_netdev_pmd_thread *pmd,
+                           odp_port_t in_port);
+
+/* Allow other implementations to call dpcls_lookup() for subtable search. */
+bool
+dpcls_lookup(struct dpcls *cls, const struct netdev_flow_key *keys[],
+             struct dpcls_rule **rules, const size_t cnt,
+             int *num_lookups_p);
+
+/* Allow other implementations to execute actions on a batch. */
+void
+dp_netdev_batch_execute(struct dp_netdev_pmd_thread *pmd,
+                        struct dp_packet_batch *packets,
+                        struct dpcls_rule *rule,
+                        uint32_t bytes,
+                        uint16_t tcp_flags);
+
+/* Available implementations for dpif work. */
+int32_t
+dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
+                             struct dp_packet_batch *packets,
+                             odp_port_t in_port);
+
 #endif /* netdev-private.h */

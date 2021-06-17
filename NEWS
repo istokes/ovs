@@ -10,6 +10,8 @@ Post-v2.15.0
      * Auto load balancing of PMDs now partially supports cross-NUMA polling
        cases, e.g if all PMD threads are running on the same NUMA node.
      * Refactor lib/dpif-netdev.c to multiple header files.
+     * Add avx512 implementation of dpif which can process non recirculated
+       packets. It supports partial HWOL, EMC, SMC and DPCLS lookups.
    - ovs-ctl:
      * New option '--no-record-hostname' to disable hostname configuration
        in ovsdb on startup.
