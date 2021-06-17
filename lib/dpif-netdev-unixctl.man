@@ -228,6 +228,16 @@ When this is the case, the above command prints the load-balancing information
 of the bonds configured in datapath \fIdp\fR showing the interface associated
 with each bucket (hash).
 .
+.IP "\fBdpif-netdev/subtable-lookup-prio-get\fR"
+Lists the DPCLS implementations or lookup functions that are available as well
+as their priorities.
+.
+.IP "\fBdpif-netdev/subtable-lookup-prio-set\fR \fIlookup_function\fR \
+\fIprio\fR"
+Sets the priority of a lookup function by the name, \fIlookup_function\fR, and
+the priority, \fIprio\fR, which should be a positive integer value. The highest
+priority lookup function is used for classification.
+.
 .IP "\fBdpif-netdev/dpif-get\fR
 Lists the DPIF implementations that are available.
 .
