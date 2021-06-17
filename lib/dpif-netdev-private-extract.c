@@ -42,6 +42,11 @@ static struct dpif_miniflow_extract_impl mfex_impls[] = {
         .extract_func = NULL,
         .name = "disable",
     },
+    {
+        .probe = NULL,
+        .extract_func = mfex_study_traffic,
+        .name = "study",
+    },
 };
 
 BUILD_ASSERT_DECL(MFEX_IMPLS_MAX_SIZE > ARRAY_SIZE(mfex_impls));

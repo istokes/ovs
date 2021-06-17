@@ -27,7 +27,7 @@
 /* Skip the autovalidator study and null when iterating all available
  * miniflow implementations.
  */
-#define MFEX_IMPL_START_IDX (1)
+#define MFEX_IMPL_START_IDX (3)
 
 /* Forward declarations. */
 struct dp_packet;
@@ -105,5 +105,17 @@ dpif_miniflow_extract_autovalidator(struct dp_packet_batch *batch,
                                     struct netdev_flow_key *keys,
                                     uint32_t keys_size, odp_port_t in_port,
                                     void *pmd_handle);
+
+/* Retrieve the number of packets by studying packets using different miniflow
+ * implementations to choose the best implementation using the maximum hitmask
+ * count.
+ * On error, returns a zero for no packets.
+ * On success, returns mask of the packets hit.
+ */
+uint32_t
+mfex_study_traffic(struct dp_packet_batch *packets,
+                   struct netdev_flow_key *keys,
+                   uint32_t keys_size, odp_port_t in_port,
+                   void *pmd_handle);
 
 #endif /* DPIF_NETDEV_AVX512_EXTRACT */
