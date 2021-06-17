@@ -23,7 +23,54 @@
 struct dp_netdev_pmd_thread;
 struct dp_packet_batch;
 
-/* Available implementations for dpif work. */
+/* Typedef for DPIF functions.
+ * Returns a bitmask of packets to handle, possibly including upcall/misses.
+ */
+typedef int32_t (*dp_netdev_input_func)(struct dp_netdev_pmd_thread *pmd,
+                                        struct dp_packet_batch *packets,
+                                        odp_port_t port_no);
+
+/* Probe a DPIF implementation. This allows the implementation to validate CPU
+ * ISA availability. Returns -ENOTSUP if not available, returns 1 if valid to
+ * use.
+ */
+typedef int32_t (*dp_netdev_input_func_probe)(void);
+
+/* Structure describing each available DPIF implementation. */
+struct dpif_netdev_impl_info_t {
+    /* Function pointer to execute to have this DPIF implementation run. */
+    dp_netdev_input_func func;
+    /* Function pointer to execute to check the CPU ISA is available to run.
+     * May be NULL, which implies that it is always valid to use.
+     */
+    dp_netdev_input_func_probe probe;
+    /* Name used to select this DPIF implementation. */
+    const char *name;
+};
+
+/* This function checks all available DPIF implementations, and selects the
+ * returns the function pointer to the one requested by "name".
+ */
+int32_t
+dp_netdev_impl_get_by_name(const char *name, dp_netdev_input_func *out_func);
+
+/* Returns the default DPIF which is first ./configure selected, but can be
+ * overridden at runtime. */
+dp_netdev_input_func dp_netdev_impl_get_default(void);
+
+/* Overrides the default DPIF with the user set DPIF. */
+void dp_netdev_impl_set_default(dp_netdev_input_func func);
+
+/* Available implementations of DPIF below. */
+int32_t
+dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
+                struct dp_packet_batch *packets,
+                odp_port_t in_port);
+
+/* AVX512 enabled DPIF implementation and probe functions. */
+int32_t
+dp_netdev_input_outer_avx512_probe(void);
+
 int32_t
 dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
                              struct dp_packet_batch *packets,

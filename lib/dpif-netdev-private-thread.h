@@ -25,6 +25,7 @@
 #include "cmap.h"
 
 #include "dpif-netdev-private-dfc.h"
+#include "dpif-netdev-private-dpif.h"
 #include "dpif-netdev-perf.h"
 #include "openvswitch/thread.h"
 
@@ -48,16 +49,6 @@ struct dp_netdev_pmd_thread_ctx {
     /* Enable the SMC cache from ovsdb config. */
     bool smc_enable_db;
 };
-
-/* Forward declaration for typedef. */
-struct dp_netdev_pmd_thread;
-
-/* Typedef for DPIF functions.
- * Returns a bitmask of packets to handle, possibly including upcall/misses.
- */
-typedef int32_t (*dp_netdev_input_func)(struct dp_netdev_pmd_thread *pmd,
-                                        struct dp_packet_batch *packets,
-                                        odp_port_t port_no);
 
 /* PMD: Poll modes drivers.  PMD accesses devices via polling to eliminate
  * the performance overhead of interrupt processing.  Therefore netdev can

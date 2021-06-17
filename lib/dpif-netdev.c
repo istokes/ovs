@@ -479,8 +479,8 @@ static void dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                                       const struct flow *flow,
                                       const struct nlattr *actions,
                                       size_t actions_len);
-static int32_t dp_netdev_input(struct dp_netdev_pmd_thread *,
-                            struct dp_packet_batch *, odp_port_t port_no);
+int32_t dp_netdev_input(struct dp_netdev_pmd_thread *,
+                        struct dp_packet_batch *, odp_port_t port_no);
 static void dp_netdev_recirculate(struct dp_netdev_pmd_thread *,
                                   struct dp_packet_batch *);
 
@@ -992,6 +992,81 @@ dpif_netdev_subtable_lookup_set(struct unixctl_conn *conn, int argc,
 }
 
 static void
+dpif_netdev_impl_set(struct unixctl_conn *conn, int argc,
+                     const char *argv[], void *aux OVS_UNUSED)
+{
+    /* This function requires just one parameter, the DPIF name.
+     * A second optional parameter can identify the datapath instance.
+     */
+    const char *dpif_name = argv[1];
+
+    static const char *error_description[2] = {
+        "Unknown DPIF implementation",
+        "CPU doesn't support the required instruction for",
+    };
+
+    dp_netdev_input_func new_func;
+    int32_t err = dp_netdev_impl_get_by_name(dpif_name, &new_func);
+    if (err) {
+        struct ds reply = DS_EMPTY_INITIALIZER;
+        ds_put_format(&reply, "DPIF implementation not available: %s %s.\n",
+                      error_description[ (err == -ENOTSUP) ], dpif_name);
+        const char *reply_str = ds_cstr(&reply);
+        unixctl_command_reply(conn, reply_str);
+        VLOG_INFO("%s", reply_str);
+        ds_destroy(&reply);
+        return;
+    }
+
+    /* argv[2] is optional datapath instance. If no datapath name is provided
+     * and only one datapath exists, the one existing datapath is reprobed.
+     */
+    ovs_mutex_lock(&dp_netdev_mutex);
+    struct dp_netdev *dp = NULL;
+
+    if (argc == 3) {
+        dp = shash_find_data(&dp_netdevs, argv[2]);
+    } else if (shash_count(&dp_netdevs) == 1) {
+        dp = shash_first(&dp_netdevs)->data;
+    }
+
+    if (!dp) {
+        ovs_mutex_unlock(&dp_netdev_mutex);
+        unixctl_command_reply_error(conn,
+                                    "please specify an existing datapath");
+        return;
+    }
+
+    /* Get PMD threads list. */
+    size_t n;
+    struct dp_netdev_pmd_thread **pmd_list;
+    sorted_poll_thread_list(dp, &pmd_list, &n);
+
+    for (size_t i = 0; i < n; i++) {
+        struct dp_netdev_pmd_thread *pmd = pmd_list[i];
+        if (pmd->core_id == NON_PMD_CORE_ID) {
+            continue;
+        }
+
+        /* Set PMD threads DPIF implementation to requested one. */
+        pmd->netdev_input_func = *new_func;
+    };
+
+    ovs_mutex_unlock(&dp_netdev_mutex);
+
+    /* Set the default implementation for PMD threads created in the future. */
+    dp_netdev_impl_set_default(*new_func);
+
+    /* Reply with success to command. */
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    ds_put_format(&reply, "DPIF implementation set to %s.\n", dpif_name);
+    const char *reply_str = ds_cstr(&reply);
+    unixctl_command_reply(conn, reply_str);
+    VLOG_INFO("%s", reply_str);
+    ds_destroy(&reply);
+}
+
+static void
 dpif_netdev_pmd_rebalance(struct unixctl_conn *conn, int argc,
                           const char *argv[], void *aux OVS_UNUSED)
 {
@@ -1212,6 +1287,10 @@ dpif_netdev_init(void)
                              NULL);
     unixctl_command_register("dpif-netdev/subtable-lookup-prio-get", "",
                              0, 0, dpif_netdev_subtable_lookup_get,
+                             NULL);
+    unixctl_command_register("dpif-netdev/dpif-set",
+                             "dpif_implementation_name [dp]",
+                             1, 2, dpif_netdev_impl_set,
                              NULL);
     return 0;
 }
@@ -6067,8 +6146,8 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     hmap_init(&pmd->send_port_cache);
     cmap_init(&pmd->tx_bonds);
 
-    /* Initialize the DPIF function pointer to the default scalar version. */
-    pmd->netdev_input_func = dp_netdev_input;
+    /* Initialize DPIF function pointer to the default configured version. */
+    pmd->netdev_input_func = dp_netdev_impl_get_default();
 
     /* init the 'flow_cache' since there is no
      * actual thread created for NON_PMD_CORE_ID. */
@@ -7002,7 +7081,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     }
 }
 
-static int32_t
+int32_t
 dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
                 struct dp_packet_batch *packets,
                 odp_port_t port_no)
