@@ -55,6 +55,19 @@ get_study_stats(void)
     return stats;
 }
 
+static uint32_t pkt_compare_count = 0;
+
+uint32_t mfex_set_study_pkt_cnt(uint32_t pkt_cmp_count,
+                                struct dpif_miniflow_extract_impl *opt)
+{
+    if ((opt->extract_func == mfex_study_traffic) && (pkt_cmp_count != 0)) {
+        pkt_compare_count = pkt_cmp_count;
+        return 0;
+    }
+    pkt_compare_count = MFEX_MAX_COUNT;
+    return -EINVAL;
+}
+
 uint32_t
 mfex_study_traffic(struct dp_packet_batch *packets,
                    struct netdev_flow_key *keys,
@@ -87,7 +100,7 @@ mfex_study_traffic(struct dp_packet_batch *packets,
 
     /* Choose the best implementation after a minimum packets have been
      * processed. */
-    if (stats->pkt_count >= MFEX_MAX_COUNT) {
+    if (stats->pkt_count >= pkt_compare_count) {
         uint32_t best_func_index = MFEX_IMPL_START_IDX;
         uint32_t max_hits = 0;
         for (int i = MFEX_IMPL_START_IDX; i < impl_count; i++) {

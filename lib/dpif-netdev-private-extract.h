@@ -127,5 +127,13 @@ dpif_miniflow_extract_get_default(void);
  * overridden at runtime. */
 void
 dpif_miniflow_extract_set_default(miniflow_extract_func func);
+/* Sets the packet count from user to the stats for use in
+ * study function to match against the classified packets to choose
+ * the optimal implementation.
+ * On error, returns EINVAL.
+ * On success, returns 0.
+ */
+uint32_t mfex_set_study_pkt_cnt(uint32_t pkt_cmp_count,
+                            struct dpif_miniflow_extract_impl *opt);
 
 #endif /* DPIF_NETDEV_AVX512_EXTRACT */

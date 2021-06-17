@@ -288,7 +288,13 @@ An implementation can be selected manually by the following command ::
 Also user can select the study implementation which studies the traffic for
 a specific number of packets by applying all availbale implementaions of
 miniflow extract and than chooses the one with most optimal result for that
-traffic pattern.
+traffic pattern. User can also provide additonal parameter as packet count
+which is minimum packets which OVS must study before choosing optimal
+implementation, If no packet count is provided than default value is choosen.
+
+Study can be selected with packet count by the following command ::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set study 1024
 
 Miniflow Extract Validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

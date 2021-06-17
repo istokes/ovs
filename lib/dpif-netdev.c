@@ -1141,14 +1141,29 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
         return;
     }
     new_func = opt->extract_func;
-    /* argv[2] is optional datapath instance. If no datapath name is provided.
+
+    /* argv[2] is optional packet count, which user can provide along with
+     * study function to set the minimum packet that must be matched in order
+     * to choose the optimal function. */
+    uint32_t pkt_cmp_count = 0;
+    uint32_t study_ret;
+    if (argc == 3) {
+        char *err_str;
+        pkt_cmp_count = strtoul(argv[2], &err_str, 10);
+        study_ret = mfex_set_study_pkt_cnt(pkt_cmp_count, opt);
+    } else {
+        /* Default packet compare count when packets count not provided. */
+        study_ret = mfex_set_study_pkt_cnt(0, opt);
+    }
+
+    /* argv[3] is optional datapath instance. If no datapath name is provided.
      * and only one datapath exists, the one existing datapath is reprobed.
      */
     ovs_mutex_lock(&dp_netdev_mutex);
     struct dp_netdev *dp = NULL;
 
-    if (argc == 3) {
-        dp = shash_find_data(&dp_netdevs, argv[2]);
+    if (argc == 4) {
+        dp = shash_find_data(&dp_netdevs, argv[3]);
     } else if (shash_count(&dp_netdevs) == 1) {
         dp = shash_first(&dp_netdevs)->data;
     }
@@ -1182,7 +1197,14 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
 
     /* Reply with success to command. */
     struct ds reply = DS_EMPTY_INITIALIZER;
-    ds_put_format(&reply, "Miniflow implementation set to %s.\n", mfex_name);
+    if (study_ret == 0) {
+        ds_put_format(&reply, "Miniflow implementation set to %s"
+                              "(minimum packet to study: %d)\n",
+                              mfex_name, pkt_cmp_count);
+    } else {
+        ds_put_format(&reply, "Miniflow implementation set to %s.\n",
+                      mfex_name);
+    }
     const char *reply_str = ds_cstr(&reply);
     VLOG_INFO("%s", reply_str);
     unixctl_command_reply(conn, reply_str);
@@ -1416,8 +1438,8 @@ dpif_netdev_init(void)
                              1, 2, dpif_netdev_impl_set,
                              NULL);
     unixctl_command_register("dpif-netdev/miniflow-parser-set",
-                             "miniflow implementation name [dp]",
-                             1, 2, dpif_miniflow_extract_impl_set,
+                             "miniflow implementation name [pkt_cnt] [dp]",
+                             1, 3, dpif_miniflow_extract_impl_set,
                              NULL);
     unixctl_command_register("dpif-netdev/dpif-get", "",
                              0, 0, dpif_netdev_impl_get,
