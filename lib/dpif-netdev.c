@@ -1177,6 +1177,9 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
 
     ovs_mutex_unlock(&dp_netdev_mutex);
 
+    /* Set the default implementation for PMD threads created in the future. */
+    dpif_miniflow_extract_set_default(*new_func);
+
     /* Reply with success to command. */
     struct ds reply = DS_EMPTY_INITIALIZER;
     ds_put_format(&reply, "Miniflow implementation set to %s.\n", mfex_name);
@@ -6282,8 +6285,8 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     /* Initialize DPIF function pointer to the default configured version. */
     pmd->netdev_input_func = dp_netdev_impl_get_default();
 
-    /*Init default miniflow_extract function */
-    pmd->miniflow_extract_opt = NULL;
+    /* Init default miniflow_extract function */
+    pmd->miniflow_extract_opt = dpif_miniflow_extract_get_default();
 
     /* init the 'flow_cache' since there is no
      * actual thread created for NON_PMD_CORE_ID. */

@@ -230,3 +230,27 @@ dpif_miniflow_extract_autovalidator(struct dp_packet_batch *packets,
      */
     return 0;
 }
+
+/* Variable to hold the defaualt mfex implementation. */
+static miniflow_extract_func default_mfex_func = NULL;
+
+void
+dpif_miniflow_extract_set_default(miniflow_extract_func func)
+{
+    default_mfex_func = func;
+}
+
+miniflow_extract_func
+dpif_miniflow_extract_get_default(void)
+{
+
+#ifdef MFEX_AUTOVALIDATOR_DEFAULT
+    ovs_assert(mfex_impls[0].extract_func ==
+               dpif_miniflow_extract_autovalidator);
+    VLOG_INFO("Default miniflow Extract implementation %s \n",
+              mfex_impls[0].name);
+    return mfex_impls[0].extract_func;
+#else
+    return default_mfex_func;
+#endif
+}

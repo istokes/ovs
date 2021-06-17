@@ -118,4 +118,14 @@ mfex_study_traffic(struct dp_packet_batch *packets,
                    uint32_t keys_size, odp_port_t in_port,
                    void *pmd_handle);
 
+/* Retrieve the default miniflow extract or auto-validator
+ * based upon build time configuration choosen by the user. */
+miniflow_extract_func
+dpif_miniflow_extract_get_default(void);
+
+/* Returns the default MFEX which is first ./configure selected, but can be
+ * overridden at runtime. */
+void
+dpif_miniflow_extract_set_default(miniflow_extract_func func);
+
 #endif /* DPIF_NETDEV_AVX512_EXTRACT */
