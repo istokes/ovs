@@ -28,6 +28,7 @@
 #include "dpif-netdev-private-dpif.h"
 #include "dpif-netdev-perf.h"
 #include "openvswitch/thread.h"
+#include "dpif-netdev-private-extract.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -109,6 +110,9 @@ struct dp_netdev_pmd_thread {
 
     /* Pointer for per-DPIF implementation scratch space. */
     void *netdev_input_func_userdata;
+
+    /* Function pointer to call for miniflow_extract() functionality. */
+    miniflow_extract_func miniflow_extract_opt;
 
     struct seq *reload_seq;
     uint64_t last_reload_seq;

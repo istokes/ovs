@@ -148,6 +148,15 @@ dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
      *     // do all processing (HWOL->MFEX->EMC->SMC)
      * }
      */
+
+    /* Do a batch minfilow extract into keys. */
+    uint32_t mf_mask = 0;
+    if (pmd->miniflow_extract_opt) {
+        mf_mask = pmd->miniflow_extract_opt(packets, keys,
+                                            batch_size, in_port,
+                                            (void *) pmd);
+    }
+    /* Perform first packet interation */
     uint32_t lookup_pkts_bitmask = (1ULL << batch_size) - 1;
     uint32_t iter = lookup_pkts_bitmask;
     while (iter) {
@@ -159,6 +168,12 @@ dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
         pkt_metadata_init(&packet->md, in_port);
 
         struct dp_netdev_flow *f = NULL;
+        struct netdev_flow_key *key = &keys[i];
+
+        /* Check the minfiflow mask to see if the packet was correctly
+        * classifed by vector mfex else do a scalar miniflow extract
+        * for that packet. */
+        uint32_t mfex_hit = (mf_mask & (1 << i));
 
         /* Check for partial hardware offload mark. */
         uint32_t mark;
@@ -166,7 +181,13 @@ dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
             f = mark_to_flow_find(pmd, mark);
             if (f) {
                 rules[i] = &f->cr;
-                pkt_meta[i].tcp_flags = parse_tcp_flags(packet);
+                /* If AVX512 MFEX already classified the packet, use it. */
+                if (mfex_hit) {
+                    pkt_meta[i].tcp_flags = miniflow_get_tcp_flags(&key->mf);
+                } else {
+                    pkt_meta[i].tcp_flags = parse_tcp_flags(packet);
+                }
+
                 pkt_meta[i].bytes = dp_packet_size(packet);
                 phwol_hits++;
                 hwol_emc_smc_hitmask |= (1 << i);
@@ -174,11 +195,12 @@ dp_netdev_input_outer_avx512(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
-        /* Do miniflow extract into keys. */
-        struct netdev_flow_key *key = &keys[i];
-        miniflow_extract(packet, &key->mf);
+        if (!mfex_hit) {
+            /* Do a scalar miniflow extract into keys */
+            miniflow_extract(packet, &key->mf);
+        }
 
-        /* Cache TCP and byte values for all packets. */
+        /* Cache TCP and byte values for all packets */
         pkt_meta[i].bytes = dp_packet_size(packet);
         pkt_meta[i].tcp_flags = miniflow_get_tcp_flags(&key->mf);
 
