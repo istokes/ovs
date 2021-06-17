@@ -21,6 +21,9 @@ Post-v2.15.0
      * Enable the AVX512 DPCLS implementation to use VPOPCNT instruction if the
        CPU supports it. This enhances performance by using the native vpopcount
        instructions, instead of the emulated version of vpopcount.
+     * An optimized miniflow extract (mfex) implementation is now available,
+       which uses CPU SIMD ISA to parse specific traffic profiles efficiently.
+       Refer to the documentation for details on how to enable it at runtime.
    - ovs-ctl:
      * New option '--no-record-hostname' to disable hostname configuration
        in ovsdb on startup.
