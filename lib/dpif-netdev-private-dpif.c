@@ -92,6 +92,39 @@ dp_netdev_impl_set_default_by_name(const char *name)
 
 }
 
+uint32_t
+dp_netdev_impl_get(struct ds *reply, struct dp_netdev_pmd_thread **pmd_list,
+                   size_t n)
+{
+    /* Add all dpif functions to reply string. */
+    ds_put_cstr(reply, "Available DPIF implementations:\n");
+
+    for (uint32_t i = 0; i < ARRAY_SIZE(dpif_impls); i++) {
+        ds_put_format(reply, "  %s (pmds: ", dpif_impls[i].name);
+
+        for (size_t j = 0; j < n; j++) {
+            struct dp_netdev_pmd_thread *pmd = pmd_list[j];
+            if (pmd->core_id == NON_PMD_CORE_ID) {
+                continue;
+            }
+
+            if (pmd->netdev_input_func == dpif_impls[i].input_func) {
+                ds_put_format(reply, "%u,", pmd->core_id);
+            }
+        }
+
+        ds_chomp(reply, ',');
+
+        if (ds_last(reply) == ' ') {
+            ds_put_cstr(reply, "none");
+        }
+
+        ds_put_cstr(reply, ")\n");
+    }
+
+    return ARRAY_SIZE(dpif_impls);
+}
+
 /* This function checks all available DPIF implementations, and selects the
  * returns the function pointer to the one requested by "name".
  */

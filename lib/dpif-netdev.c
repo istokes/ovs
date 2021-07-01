@@ -967,6 +967,33 @@ dpif_netdev_subtable_lookup_set(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+dpif_netdev_impl_get(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                     const char *argv[] OVS_UNUSED, void *aux OVS_UNUSED)
+{
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    struct shash_node *node;
+    uint32_t count = 0;
+
+    SHASH_FOR_EACH (node, &dp_netdevs) {
+        struct dp_netdev *dp = node->data;
+
+        /* Get PMD threads list, required to get DPCLS instances. */
+        size_t n;
+        struct dp_netdev_pmd_thread **pmd_list;
+        sorted_poll_thread_list(dp, &pmd_list, &n);
+        count = dp_netdev_impl_get(&reply, pmd_list, n);
+    }
+
+    if (count == 0) {
+        unixctl_command_reply_error(conn, "Error getting dpif names.");
+    } else {
+        unixctl_command_reply(conn, ds_cstr(&reply));
+    }
+
+    ds_destroy(&reply);
+}
+
+static void
 dpif_netdev_impl_set(struct unixctl_conn *conn, int argc OVS_UNUSED,
                      const char *argv[], void *aux OVS_UNUSED)
 {
@@ -1251,6 +1278,9 @@ dpif_netdev_init(void)
     unixctl_command_register("dpif-netdev/dpif-impl-set",
                              "dpif_implementation_name",
                              1, 1, dpif_netdev_impl_set,
+                             NULL);
+    unixctl_command_register("dpif-netdev/dpif-impl-get", "",
+                             0, 0, dpif_netdev_impl_get,
                              NULL);
     return 0;
 }
