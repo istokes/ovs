@@ -30,5 +30,6 @@
 #include "dpif-netdev-private-dpcls.h"
 #include "dpif-netdev-private-dfc.h"
 #include "dpif-netdev-private-thread.h"
+#include "dpif-netdev-private-hwol.h"
 
 #endif /* netdev-private.h */

@@ -18,6 +18,7 @@
 #include "dpif-netdev.h"
 #include "dpif-netdev-private.h"
 #include "dpif-netdev-private-dfc.h"
+#include "dpif-netdev-private-hwol.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -1969,26 +1970,8 @@ dp_netdev_pmd_find_dpcls(struct dp_netdev_pmd_thread *pmd,
     return cls;
 }
 
-#define MAX_FLOW_MARK       (UINT32_MAX - 1)
-#define INVALID_FLOW_MARK   0
-/* Zero flow mark is used to indicate the HW to remove the mark. A packet
- * marked with zero mark is received in SW without a mark at all, so it
- * cannot be used as a valid mark.
- */
 
-struct megaflow_to_mark_data {
-    const struct cmap_node node;
-    ovs_u128 mega_ufid;
-    uint32_t mark;
-};
-
-struct flow_mark {
-    struct cmap megaflow_to_mark;
-    struct cmap mark_to_flow;
-    struct id_pool *pool;
-};
-
-static struct flow_mark flow_mark = {
+struct flow_mark flow_mark = {
     .megaflow_to_mark = CMAP_INITIALIZER,
     .mark_to_flow = CMAP_INITIALIZER,
 };
@@ -2155,23 +2138,6 @@ flow_mark_flush(struct dp_netdev_pmd_thread *pmd)
             queue_netdev_flow_del(pmd, flow);
         }
     }
-}
-
-static struct dp_netdev_flow *
-mark_to_flow_find(const struct dp_netdev_pmd_thread *pmd,
-                  const uint32_t mark)
-{
-    struct dp_netdev_flow *flow;
-
-    CMAP_FOR_EACH_WITH_HASH (flow, mark_node, hash_int(mark, 0),
-                             &flow_mark.mark_to_flow) {
-        if (flow->mark == mark && flow->pmd_id == pmd->core_id &&
-            flow->dead == false) {
-            return flow;
-        }
-    }
-
-    return NULL;
 }
 
 static struct dp_flow_offload_item *
