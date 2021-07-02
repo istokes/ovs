@@ -46,6 +46,7 @@
 #include "dpif.h"
 #include "dpif-netdev-lookup.h"
 #include "dpif-netdev-perf.h"
+#include "dpif-netdev-private-extract.h"
 #include "dpif-provider.h"
 #include "dummy.h"
 #include "fat-rwlock.h"
@@ -1056,6 +1057,97 @@ dpif_netdev_impl_set(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+dpif_miniflow_extract_impl_get(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                               const char *argv[] OVS_UNUSED,
+                               void *aux OVS_UNUSED)
+{
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    struct shash_node *node;
+    uint32_t count = 0;
+
+    SHASH_FOR_EACH (node, &dp_netdevs) {
+        struct dp_netdev *dp = node->data;
+
+        /* Get PMD threads list. */
+        size_t n;
+        struct dp_netdev_pmd_thread **pmd_list;
+        sorted_poll_thread_list(dp, &pmd_list, &n);
+        count = dp_mfex_impl_get(&reply, pmd_list, n);
+    }
+
+    if (count == 0) {
+        unixctl_command_reply_error(conn, "Error getting Mfex names.");
+    } else {
+        unixctl_command_reply(conn, ds_cstr(&reply));
+    }
+
+    ds_destroy(&reply);
+}
+
+static void
+dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
+                     const char *argv[], void *aux OVS_UNUSED)
+{
+    /* This function requires just one parameter, the miniflow name.
+     */
+    const char *mfex_name = argv[1];
+    struct shash_node *node;
+
+    static const char *error_description[2] = {
+        "Unknown miniflow implementation",
+        "implementation doesn't exist",
+    };
+
+    ovs_mutex_lock(&dp_netdev_mutex);
+    int32_t err = dp_mfex_impl_set_default_by_name(mfex_name);
+
+    if (err) {
+        struct ds reply = DS_EMPTY_INITIALIZER;
+        ds_put_format(&reply,
+                      "Miniflow implementation not available: %s %s.\n",
+                      error_description[ (err == EINVAL) ], mfex_name);
+        const char *reply_str = ds_cstr(&reply);
+        unixctl_command_reply_error(conn, reply_str);
+        VLOG_INFO("%s", reply_str);
+        ds_destroy(&reply);
+        ovs_mutex_unlock(&dp_netdev_mutex);
+        return;
+    }
+
+    SHASH_FOR_EACH (node, &dp_netdevs) {
+        struct dp_netdev *dp = node->data;
+
+        /* Get PMD threads list. */
+        size_t n;
+        struct dp_netdev_pmd_thread **pmd_list;
+        sorted_poll_thread_list(dp, &pmd_list, &n);
+
+        for (size_t i = 0; i < n; i++) {
+            struct dp_netdev_pmd_thread *pmd = pmd_list[i];
+            if (pmd->core_id == NON_PMD_CORE_ID) {
+                continue;
+            }
+
+            /* Initialize MFEX function pointer to the newly configured
+             * default. */
+            miniflow_extract_func default_func = dp_mfex_impl_get_default();
+            atomic_uintptr_t *pmd_func = (void *) &pmd->miniflow_extract_opt;
+            atomic_store_relaxed(pmd_func, (uintptr_t) default_func);
+        };
+    }
+
+    ovs_mutex_unlock(&dp_netdev_mutex);
+
+    /* Reply with success to command. */
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    ds_put_format(&reply, "Miniflow implementation set to %s.\n", mfex_name);
+    const char *reply_str = ds_cstr(&reply);
+    unixctl_command_reply(conn, reply_str);
+    VLOG_INFO("%s", reply_str);
+    ds_destroy(&reply);
+}
+
+static void
 dpif_netdev_pmd_rebalance(struct unixctl_conn *conn, int argc,
                           const char *argv[], void *aux OVS_UNUSED)
 {
@@ -1284,6 +1376,13 @@ dpif_netdev_init(void)
     unixctl_command_register("dpif-netdev/dpif-impl-get", "",
                              0, 0, dpif_netdev_impl_get,
                              NULL);
+    unixctl_command_register("dpif-netdev/miniflow-parser-set",
+                             "miniflow implementation name",
+                             1, 1, dpif_miniflow_extract_impl_set,
+                             NULL);
+    unixctl_command_register("dpif-netdev/miniflow-parser-get", "",
+                             0, 0, dpif_miniflow_extract_impl_get,
+                             NULL);
     return 0;
 }
 
@@ -1484,6 +1583,8 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     dp->upcall_cb = NULL;
 
     dp->conntrack = conntrack_init();
+
+    dpif_miniflow_extract_init();
 
     atomic_init(&dp->emc_insert_min, DEFAULT_EM_FLOW_INSERT_MIN);
     atomic_init(&dp->tx_flush_interval, DEFAULT_TX_FLUSH_INTERVAL);
@@ -6192,6 +6293,11 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     atomic_uintptr_t *pmd_func = (void *) &pmd->netdev_input_func;
     atomic_init(pmd_func, (uintptr_t) default_func);
 
+    /* Init default miniflow_extract function */
+    miniflow_extract_func mfex_func = dp_mfex_impl_get_default();
+    atomic_uintptr_t *pmd_func_mfex = (void *)&pmd->miniflow_extract_opt;
+    atomic_store_relaxed(pmd_func_mfex, (uintptr_t) mfex_func);
+
     /* init the 'flow_cache' since there is no
      * actual thread created for NON_PMD_CORE_ID. */
     if (core_id == NON_PMD_CORE_ID) {
@@ -6781,6 +6887,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     size_t n_missed = 0, n_emc_hit = 0, n_phwol_hit = 0;
     struct dfc_cache *cache = &pmd->flow_cache;
     struct dp_packet *packet;
+    struct dp_packet_batch single_packet;
     const size_t cnt = dp_packet_batch_size(packets_);
     uint32_t cur_min = pmd->ctx.emc_insert_min;
     int i;
@@ -6788,6 +6895,11 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     bool smc_enable_db;
     size_t map_cnt = 0;
     bool batch_enable = true;
+
+    single_packet.count = 1;
+
+    miniflow_extract_func mfex_func;
+    atomic_read_relaxed(&pmd->miniflow_extract_opt, &mfex_func);
 
     atomic_read_relaxed(&pmd->dp->smc_enable_db, &smc_enable_db);
     pmd_perf_update_counter(&pmd->perf_stats,
@@ -6839,7 +6951,20 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
-        miniflow_extract(packet, &key->mf);
+        /* Set the count and packet for miniflow_opt with batch_size 1. */
+        if ((mfex_func) && (!md_is_valid)) {
+            single_packet.packets[0] = packet;
+            int mf_ret;
+
+            mf_ret = mfex_func(&single_packet, key, 1, port_no, pmd);
+            /* Fallback to original miniflow_extract if there is a miss. */
+            if (!mf_ret) {
+                miniflow_extract(packet, &key->mf);
+            }
+        } else {
+            miniflow_extract(packet, &key->mf);
+        }
+
         key->len = 0; /* Not computed yet. */
         key->hash =
                 (md_is_valid == false)
