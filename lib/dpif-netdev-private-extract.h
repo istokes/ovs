@@ -69,6 +69,7 @@ struct dpif_miniflow_extract_impl {
  * should always come before the generic AVX512-F version.
  */
 enum dpif_miniflow_extract_impl_idx {
+    MFEX_IMPL_AUTOVALIDATOR,
     MFEX_IMPL_SCALAR,
     MFEX_IMPL_MAX
 };
@@ -101,5 +102,17 @@ int32_t dp_mfex_impl_set_default_by_name(const char *name);
  */
 void
 dpif_miniflow_extract_init(void);
+
+/* Retrieve the hitmask of the batch of pakcets which is obtained by comparing
+ * different miniflow implementations with linear miniflow extract.
+ * Key_size need to be at least the size of the batch.
+ * On error, returns a zero.
+ * On success, returns the number of packets in the batch compared.
+ */
+uint32_t
+dpif_miniflow_extract_autovalidator(struct dp_packet_batch *batch,
+                                    struct netdev_flow_key *keys,
+                                    uint32_t keys_size, odp_port_t in_port,
+                                    struct dp_netdev_pmd_thread *pmd_handle);
 
 #endif /* MFEX_AVX512_EXTRACT */
