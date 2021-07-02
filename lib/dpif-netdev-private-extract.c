@@ -47,6 +47,11 @@ static struct dpif_miniflow_extract_impl mfex_impls[] = {
         .probe = NULL,
         .extract_func = NULL,
         .name = "scalar", },
+
+    [MFEX_IMPL_STUDY] = {
+        .probe = NULL,
+        .extract_func = mfex_study_traffic,
+        .name = "study", },
 };
 
 BUILD_ASSERT_DECL(MFEX_IMPL_MAX >= ARRAY_SIZE(mfex_impls));
@@ -87,7 +92,6 @@ int32_t
 dp_mfex_impl_set_default_by_name(const char *name)
 {
     miniflow_extract_func new_default;
-
 
     int32_t err = dp_mfex_impl_get_by_name(name, &new_default);
 
@@ -146,7 +150,6 @@ dp_mfex_impl_get_by_name(const char *name, miniflow_extract_func *out_func)
     }
 
     uint32_t i;
-
     for (i = 0; i < ARRAY_SIZE(mfex_impls); i++) {
         if (strcmp(mfex_impls[i].name, name) == 0) {
             /* Probe function is optional - so check it is set before exec. */
@@ -161,6 +164,18 @@ dp_mfex_impl_get_by_name(const char *name, miniflow_extract_func *out_func)
     }
 
     return -EINVAL;
+}
+
+int32_t
+dpif_mfex_impl_info_get(struct dpif_miniflow_extract_impl **out_ptr)
+{
+    if (out_ptr == NULL) {
+        return -EINVAL;
+    }
+
+    *out_ptr = mfex_impls;
+
+    return ARRAY_SIZE(mfex_impls);
 }
 
 uint32_t
