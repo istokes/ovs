@@ -649,6 +649,7 @@ pmd_info_show_stats(struct ds *reply,
                   "  packet recirculations: %"PRIu64"\n"
                   "  avg. datapath passes per packet: %.02f\n"
                   "  phwol hits: %"PRIu64"\n"
+                  "  mfex opt hits: %"PRIu64"\n"
                   "  emc hits: %"PRIu64"\n"
                   "  smc hits: %"PRIu64"\n"
                   "  megaflow hits: %"PRIu64"\n"
@@ -658,10 +659,9 @@ pmd_info_show_stats(struct ds *reply,
                   "  avg. packets per output batch: %.02f\n",
                   total_packets, stats[PMD_STAT_RECIRC],
                   passes_per_pkt, stats[PMD_STAT_PHWOL_HIT],
-                  stats[PMD_STAT_EXACT_HIT],
-                  stats[PMD_STAT_SMC_HIT],
-                  stats[PMD_STAT_MASKED_HIT], lookups_per_hit,
-                  stats[PMD_STAT_MISS], stats[PMD_STAT_LOST],
+                  stats[PMD_STAT_MFEX_OPT_HIT], stats[PMD_STAT_EXACT_HIT],
+                  stats[PMD_STAT_SMC_HIT], stats[PMD_STAT_MASKED_HIT],
+                  lookups_per_hit, stats[PMD_STAT_MISS], stats[PMD_STAT_LOST],
                   packets_per_batch);
 
     if (total_cycles == 0) {
@@ -6953,7 +6953,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
                bool md_is_valid, odp_port_t port_no)
 {
     struct netdev_flow_key *key = &keys[0];
-    size_t n_missed = 0, n_emc_hit = 0, n_phwol_hit = 0;
+    size_t n_missed = 0, n_emc_hit = 0, n_phwol_hit = 0,  n_mfex_opt_hit = 0;
     struct dfc_cache *cache = &pmd->flow_cache;
     struct dp_packet *packet;
     struct dp_packet_batch single_packet;
@@ -7027,7 +7027,9 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
             mf_ret = mfex_func(&single_packet, key, 1, port_no, pmd);
             /* Fallback to original miniflow_extract if there is a miss. */
-            if (!mf_ret) {
+            if (mf_ret) {
+                n_mfex_opt_hit++;
+            } else {
                 miniflow_extract(packet, &key->mf);
             }
         } else {
@@ -7081,6 +7083,8 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     *n_flows = map_cnt;
 
     pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_PHWOL_HIT, n_phwol_hit);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_MFEX_OPT_HIT,
+                            n_mfex_opt_hit);
     pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_EXACT_HIT, n_emc_hit);
 
     if (!smc_enable_db) {
