@@ -25,9 +25,11 @@ Post-v2.15.0
      * Add command line option to switch between mfex function pointers.
      * Add miniflow extract auto-validator function to compare different
        miniflow extract implementations against default implementation.
-    *  Add study function to miniflow function table which studies packet
+     * Add study function to miniflow function table which studies packet
        and automatically chooses the best miniflow implementation for that
        traffic.
+     * Add build time configure command to enable auto-validatior as default
+       miniflow implementation at build time.
    - ovs-ctl:
      * New option '--no-record-hostname' to disable hostname configuration
        in ovsdb on startup.
@@ -43,7 +45,6 @@ Post-v2.15.0
    - ovsdb-tool:
      * New option '--election-timer' to the 'create-cluster' command to set the
        leader election timer during cluster creation.
-
 
 v2.15.0 - 15 Feb 2021
 ---------------------

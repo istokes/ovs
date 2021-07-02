@@ -76,6 +76,12 @@ dpif_miniflow_extract_init(void)
 miniflow_extract_func
 dp_mfex_impl_get_default(void)
 {
+
+#ifdef MFEX_AUTOVALIDATOR_DEFAULT
+    VLOG_INFO("Default miniflow Extract implementation %s",
+              mfex_impls[MFEX_IMPL_AUTOVALIDATOR].name);
+    default_mfex_func = mfex_impls[MFEX_IMPL_AUTOVALIDATOR].extract_func;
+#else
     /* For the first call, this will be NULL. Compute the compile time default.
      */
     if (!default_mfex_func) {
@@ -84,7 +90,7 @@ dp_mfex_impl_get_default(void)
                   mfex_impls[MFEX_IMPL_SCALAR].name);
         default_mfex_func = mfex_impls[MFEX_IMPL_SCALAR].extract_func;
     }
-
+#endif
     return default_mfex_func;
 }
 

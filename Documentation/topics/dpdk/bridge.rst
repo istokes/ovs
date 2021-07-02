@@ -306,3 +306,7 @@ To set the Miniflow autovalidator, use this command ::
 
     $ ovs-appctl dpif-netdev/miniflow-parser-set autovalidator
 
+A compile time option is available in order to test it with the OVS unit
+test suite. Use the following configure option ::
+
+    $ ./configure --enable-mfex-default-autovalidator
