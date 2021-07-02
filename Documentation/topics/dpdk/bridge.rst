@@ -282,12 +282,43 @@ command also shows whether the CPU supports each implementation ::
 
 An implementation can be selected manually by the following command ::
 
-    $ ovs-appctl dpif-netdev/miniflow-parser-set study
+    $ ovs-appctl dpif-netdev/miniflow-parser-set [name] [study_cnt] [core_id]
+
+The above command has two optional parameters study_cnt and core_id which can
+be set optionally. The second parameter study_cnt is specific to study
+where how many packets needed to choose best implementation can be provided.
+Third parameter core_id can also be provided to set a particular miniflow
+extract function to a specific pmd thread on the core. In case of any other
+implementation other than study second parameter [study_cnt] can pe provided
+with any arbitatry number and is ignored.
 
 Also user can select the study implementation which studies the traffic for
 a specific number of packets by applying all available implementaions of
 miniflow extract and than chooses the one with most optimal result for that
-traffic pattern.
+traffic pattern. A user can also provide an additional packet count parameter
+which is the minimum number of packets that OVS must study before choosing an
+optimal implementation. If no packet count is provided then the default value
+128 is chosen. Also, as there is no synchronization point between threads, one
+PMD thread might still be running a previous round, and can now decide on
+earlier data.
+
+Study can be selected with packet count by the following command ::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set study 1024
+
+Study can be selected with packet count and explicit PMD selection
+by the following command ::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set study 1024 3
+
+In the above command the last parameter is the CORE ID of the PMD
+thread and this can also be used to explicitly set the miniflow
+extraction function pointer on different PMD threads.
+
+Scalar can be selected on core 3 by the following command where
+study count can be put as any arbitary number::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set scalar 0 3
 
 Miniflow Extract Validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

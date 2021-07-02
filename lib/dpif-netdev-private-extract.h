@@ -135,4 +135,14 @@ mfex_study_traffic(struct dp_packet_batch *packets,
                    uint32_t keys_size, odp_port_t in_port,
                    struct dp_netdev_pmd_thread *pmd_handle);
 
+/* Sets the packet count from user to the stats for use in
+ * study function to match against the classified packets to choose
+ * the optimal implementation.
+ * On error, returns EINVAL.
+ * On success, returns 0.
+ */
+uint32_t mfex_set_study_pkt_cnt(uint32_t pkt_cmp_count,
+                                const char *name);
+
 #endif /* MFEX_AVX512_EXTRACT */
+

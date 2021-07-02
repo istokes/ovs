@@ -1089,9 +1089,13 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
                      const char *argv[], void *aux OVS_UNUSED)
 {
     /* This function requires just one parameter, the miniflow name.
+     * A second optional parameter can set the packet count to match in study.
+     * A third optional paramter PMD thread ID can be also provided which
+     * allows users to set miniflow implementation on a particular pmd.
      */
     const char *mfex_name = argv[1];
     struct shash_node *node;
+    struct ds reply = DS_EMPTY_INITIALIZER;
 
     static const char *error_description[2] = {
         "Unknown miniflow implementation",
@@ -1102,7 +1106,6 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
     int32_t err = dp_mfex_impl_set_default_by_name(mfex_name);
 
     if (err) {
-        struct ds reply = DS_EMPTY_INITIALIZER;
         ds_put_format(&reply,
                       "Miniflow implementation not available: %s %s.\n",
                       error_description[ (err == EINVAL) ], mfex_name);
@@ -1112,6 +1115,44 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
         ds_destroy(&reply);
         ovs_mutex_unlock(&dp_netdev_mutex);
         return;
+    }
+
+    /* argv[2] is optional packet count, which user can provide along with
+     * study function to set the minimum packet that must be matched in order
+     * to choose the optimal function. */
+    uint32_t pkt_cmp_count = 0;
+    uint32_t study_ret = 0;
+
+    if ((argc == 3) || (argc == 4)) {
+        if (str_to_uint(argv[2], 10, &pkt_cmp_count)) {
+            study_ret = mfex_set_study_pkt_cnt(pkt_cmp_count, mfex_name);
+        } else {
+           study_ret = -EINVAL;
+        }
+    } else {
+        /* Default packet compare count when packets count not provided. */
+        study_ret = mfex_set_study_pkt_cnt(0, mfex_name);
+    }
+
+    uint32_t pmd_thread_specified = 0;
+    uint32_t pmd_thread_to_change = 0;
+    uint32_t pmd_thread_update_ok = 0;
+    if (argc == 4) {
+        if (str_to_uint(argv[3], 10, &pmd_thread_to_change)) {
+            pmd_thread_specified = 1;
+        } else {
+            /* argv[3] isn't even a uint. return without changing anything. */
+            ovs_mutex_unlock(&dp_netdev_mutex);
+            ds_put_format(&reply,
+                 "Error: Miniflow parser not changed, PMD thread argument"
+                 " passed is not valid: '%s'. Pass a valid pmd thread ID.\n",
+                 argv[3]);
+            const char *reply_str = ds_cstr(&reply);
+            VLOG_INFO("%s", reply_str);
+            unixctl_command_reply_error(conn, reply_str);
+            ds_destroy(&reply);
+            return;
+        }
     }
 
     SHASH_FOR_EACH (node, &dp_netdevs) {
@@ -1128,8 +1169,14 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
                 continue;
             }
 
+            if ((pmd_thread_specified) &&
+                (pmd->core_id != pmd_thread_to_change)) {
+                continue;
+            }
+
             /* Initialize MFEX function pointer to the newly configured
              * default. */
+            pmd_thread_update_ok = 1;
             miniflow_extract_func default_func = dp_mfex_impl_get_default();
             atomic_uintptr_t *pmd_func = (void *) &pmd->miniflow_extract_opt;
             atomic_store_relaxed(pmd_func, (uintptr_t) default_func);
@@ -1138,9 +1185,30 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
 
     ovs_mutex_unlock(&dp_netdev_mutex);
 
+    /* If PMD thread was specified, but it wasn't found, return error. */
+    if (pmd_thread_specified && !pmd_thread_update_ok) {
+        ds_put_format(&reply,
+             "Error: Miniflow parser not changed, PMD thread %d not in use,"
+             " pass a valid pmd thread ID.\n",
+             pmd_thread_to_change);
+        const char *reply_str = ds_cstr(&reply);
+        VLOG_INFO("%s", reply_str);
+        unixctl_command_reply_error(conn, reply_str);
+        ds_destroy(&reply);
+        return;
+    }
+
     /* Reply with success to command. */
-    struct ds reply = DS_EMPTY_INITIALIZER;
-    ds_put_format(&reply, "Miniflow implementation set to %s.\n", mfex_name);
+    ds_put_format(&reply, "Miniflow implementation set to %s", mfex_name);
+    if (pmd_thread_specified) {
+        ds_put_format(&reply, ", on pmd thread %d", pmd_thread_to_change);
+    }
+    if (study_ret == 0) {
+        ds_put_format(&reply, ", studing %d packets", pkt_cmp_count);
+    }
+
+    ds_put_format(&reply, "\n");
+
     const char *reply_str = ds_cstr(&reply);
     VLOG_INFO("%s", reply_str);
     unixctl_command_reply(conn, reply_str);
@@ -1377,8 +1445,9 @@ dpif_netdev_init(void)
                              0, 0, dpif_netdev_impl_get,
                              NULL);
     unixctl_command_register("dpif-netdev/miniflow-parser-set",
-                             "miniflow implementation name",
-                             1, 1, dpif_miniflow_extract_impl_set,
+                             "miniflow_implementation_name [study_pkt_cnt]"
+                             " [pmd_core]",
+                             1, 3, dpif_miniflow_extract_impl_set,
                              NULL);
     unixctl_command_register("dpif-netdev/miniflow-parser-get", "",
                              0, 0, dpif_miniflow_extract_impl_get,

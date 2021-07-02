@@ -118,7 +118,7 @@ dp_mfex_impl_get(struct ds *reply, struct dp_netdev_pmd_thread **pmd_list,
 
     for (uint32_t i = 0; i < ARRAY_SIZE(mfex_impls); i++) {
 
-        ds_put_format(reply, "  %s (available: %s)(pmds: ",
+        ds_put_format(reply, "  %s (available: %s, pmds: ",
                       mfex_impls[i].name, mfex_impls[i].available ?
                       "True" : "False");
 
