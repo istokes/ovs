@@ -52,6 +52,19 @@ static struct dpif_miniflow_extract_impl mfex_impls[] = {
         .probe = NULL,
         .extract_func = mfex_study_traffic,
         .name = "study", },
+
+/* Compile in implementations only if the compiler ISA checks pass. */
+#if (__x86_64__ && HAVE_AVX512F && HAVE_LD_AVX512_GOOD && __SSE4_2__)
+    [MFEX_IMPL_VMBI_IPv4_UDP] = {
+        .probe = mfex_avx512_vbmi_probe,
+        .extract_func = mfex_avx512_vbmi_ip_udp,
+        .name = "avx512_vbmi_ipv4_udp", },
+
+    [MFEX_IMPL_IPv4_UDP] = {
+        .probe = mfex_avx512_probe,
+        .extract_func = mfex_avx512_ip_udp,
+        .name = "avx512_ipv4_udp", },
+#endif
 };
 
 BUILD_ASSERT_DECL(MFEX_IMPL_MAX >= ARRAY_SIZE(mfex_impls));
@@ -222,7 +235,8 @@ dpif_miniflow_extract_autovalidator(struct dp_packet_batch *packets,
 
     uint32_t batch_failed = 0;
     /* Iterate through each version of miniflow implementations. */
-    for (int j = MFEX_IMPL_MAX; j < MFEX_IMPL_MAX; j++) {
+    for (int j = MFEX_IMPL_VMBI_IPv4_UDP; j < MFEX_IMPL_MAX; j++) {
+
         if ((j < MFEX_IMPL_MAX) || (!mfex_impls[j].available)) {
             continue;
         }

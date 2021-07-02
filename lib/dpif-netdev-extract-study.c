@@ -89,7 +89,7 @@ mfex_study_traffic(struct dp_packet_batch *packets,
      * to be compared after certain packets have been hit to choose
      * the best miniflow_extract version for that traffic.
      */
-    for (int i = MFEX_IMPL_MAX; i < impl_count; i++) {
+    for (int i = MFEX_IMPL_VMBI_IPv4_UDP; i < impl_count; i++) {
         if (miniflow_funcs[i].available) {
             hitmask = miniflow_funcs[i].extract_func(packets, keys, keys_size,
                                                      in_port, pmd_handle);
@@ -108,9 +108,9 @@ mfex_study_traffic(struct dp_packet_batch *packets,
      * processed.
      */
     if (stats->pkt_count >= mfex_study_pkts_count) {
-        uint32_t best_func_index = MFEX_IMPL_MAX;
+        uint32_t best_func_index = MFEX_IMPL_VMBI_IPv4_UDP;
         uint32_t max_hits = 0;
-        for (int i = MFEX_IMPL_MAX; i < impl_count; i++) {
+        for (int i = MFEX_IMPL_VMBI_IPv4_UDP; i < impl_count; i++) {
             if (stats->impl_hitcount[i] > max_hits) {
                 max_hits = stats->impl_hitcount[i];
                 best_func_index = i;
