@@ -15,6 +15,7 @@ jobs:
       CC:          ${{ matrix.compiler }}
       DPDK:        ${{ matrix.dpdk }}
       DPDK_SHARED: ${{ matrix.dpdk_shared }}
+      DPDK_VER:    refs/heads/main
       DPDK_EXPERIMENTAL: ${{ matrix.dpdk_experimental }}
       KERNEL:      ${{ matrix.kernel }}
       LIBS:        ${{ matrix.libs }}
