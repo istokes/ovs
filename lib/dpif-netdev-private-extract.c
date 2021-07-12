@@ -77,20 +77,24 @@ dp_mfex_impl_get_default(void)
 {
     atomic_uintptr_t *mfex_func = (void *)&default_mfex_func;
     static bool default_mfex_func_set = false;
+#ifdef MFEX_AUTOVALIDATOR_DEFAULT
+    int mfex_idx = MFEX_IMPL_AUTOVALIDATOR;
+#else
     int mfex_idx = MFEX_IMPL_SCALAR;
+#endif
 
     /* For the first call, this will be choosen based on the
      * compile time flag and if nor flag is set it is set to
      * default scalar.
      */
     if (OVS_UNLIKELY(!default_mfex_func_set)) {
-        VLOG_INFO("Default MFEX implementation is %s.\n",
+
+        VLOG_INFO("Default miniflow extract implementation%s.\n",
                   mfex_impls[mfex_idx].name);
         atomic_store_relaxed(mfex_func, (uintptr_t) mfex_impls
                              [mfex_idx].extract_func);
         default_mfex_func_set = true;
     }
-
     return default_mfex_func;
 }
 
