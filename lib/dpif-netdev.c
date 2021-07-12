@@ -7018,6 +7018,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     size_t n_missed = 0, n_emc_hit = 0, n_phwol_hit = 0,  n_mfex_opt_hit = 0;
     struct dfc_cache *cache = &pmd->flow_cache;
     struct dp_packet *packet;
+    struct dp_packet_batch single_packet;
     const size_t cnt = dp_packet_batch_size(packets_);
     uint32_t cur_min = pmd->ctx.emc_insert_min;
     const uint32_t recirc_depth = *recirc_depth_get();
@@ -7027,6 +7028,11 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     bool smc_enable_db;
     size_t map_cnt = 0;
     bool batch_enable = true;
+
+    single_packet.count = 1;
+
+    miniflow_extract_func mfex_func;
+    atomic_read_relaxed(&pmd->miniflow_extract_opt, &mfex_func);
 
     atomic_read_relaxed(&pmd->dp->smc_enable_db, &smc_enable_db);
     pmd_perf_update_counter(&pmd->perf_stats,
@@ -7078,7 +7084,21 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
-        miniflow_extract(packet, &key->mf);
+        /* Set the count and packet for miniflow_opt with batch_size 1. */
+        if ((mfex_func) && (!md_is_valid)) {
+            single_packet.packets[0] = packet;
+            int mf_ret;
+
+            mf_ret = mfex_func(&single_packet, key, 1, port_no, pmd);
+            /* Fallback to original miniflow_extract if there is a miss. */
+            if (mf_ret) {
+                n_mfex_opt_hit++;
+            } else {
+                miniflow_extract(packet, &key->mf);
+            }
+        } else {
+            miniflow_extract(packet, &key->mf);
+        }
 
         key->len = 0; /* Not computed yet. */
         key->hash =
