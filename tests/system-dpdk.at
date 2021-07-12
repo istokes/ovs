@@ -232,3 +232,52 @@ OVS_VSWITCHD_STOP(["\@does not exist. The Open vSwitch kernel module is probably
 \@EAL: No free hugepages reported in hugepages-1048576kB@d"])
 AT_CLEANUP
 dnl --------------------------------------------------------------------------
+
+dnl --------------------------------------------------------------------------
+dnl Add standard DPDK PHY port
+AT_SETUP([OVS-DPDK - MFEX Autovalidator])
+AT_KEYWORDS([dpdk])
+
+OVS_DPDK_START()
+
+dnl Add userspace bridge and attach it to OVS
+AT_CHECK([ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br0 p1 -- set Interface p1 type=dpdk options:dpdk-devargs=net_pcap1,rx_pcap=$srcdir/pcap/mfex_test.pcap,infinite_rx=1], [], [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+
+
+AT_CHECK([ovs-appctl dpif-netdev/miniflow-parser-set autovalidator], [0], [dnl
+Miniflow implementation set to autovalidator.
+])
+
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics | grep -oP 'rx_packets=\s*\K\d+'` -ge 1000])
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br0 p1], [], [stdout], [stderr])
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+dnl --------------------------------------------------------------------------
+dnl Add standard DPDK PHY port
+AT_SETUP([OVS-DPDK - MFEX Autovalidator Fuzzy])
+AT_KEYWORDS([dpdk])
+AT_SKIP_IF([! pip3 list | grep scapy], [], [])
+AT_CHECK([$PYTHON3 $srcdir/mfex_fuzzy.py $srcdir], [], [stdout])
+OVS_DPDK_START()
+
+dnl Add userspace bridge and attach it to OVS
+AT_CHECK([ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br0 p1 -- set Interface p1 type=dpdk options:dpdk-devargs=net_pcap1,rx_pcap=$srcdir/pcap/fuzzy.pcap,infinite_rx=1], [], [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+
+
+AT_CHECK([ovs-appctl dpif-netdev/miniflow-parser-set autovalidator], [0], [dnl
+Miniflow implementation set to autovalidator.
+])
+
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics | grep -oP 'rx_packets=\s*\K\d+'` -ge 100000])
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br0 p1], [], [stdout], [stderr])
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
