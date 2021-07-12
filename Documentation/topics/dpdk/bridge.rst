@@ -284,12 +284,45 @@ command also shows whether the CPU supports each implementation ::
 
 An implementation can be selected manually by the following command ::
 
-    $ ovs-appctl dpif-netdev/miniflow-parser-set study
+    $ ovs-appctl dpif-netdev/miniflow-parser-set [-pmd core_id] [name]
+                                                 [study_cnt]
 
-Also user can select the study implementation which studies the traffic for
+The above command has two optional parameters: study_cnt and core_id.
+The core_id set a particular miniflow extract function to a specific
+pmd thread on the core. Third parameter study_cnt, which is specific
+to study and ignored by other implementations, means how many packets
+are needed to choose the best implementation.
+
+The user can select the study implementation which studies the traffic for
 a specific number of packets by applying all available implementaions of
 miniflow extract and than chooses the one with most optimal result for that
-traffic pattern.
+traffic pattern. The user can optionally provide an packet count [study_cnt]
+parameter which is the minimum number of packets that OVS must study before
+choosing an optimal implementation. If no packet count is provided, then the
+default value, 128 is chosen. Also, as there is no synchronization point
+between threads, one PMD thread might still be running a previous round,
+and can now decide on earlier data.
+
+The per packet count is a global value, and parallel `study()` executions with
+differing packet counts will use the most recent count value provided by usser.
+
+Study can be selected with packet count by the following command ::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set study 1024
+
+Study can be selected with packet count and explicit PMD selection
+by the following command ::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set -pmd 3 study 1024
+
+In the above command the last parameter is the CORE ID of the PMD
+thread and this can also be used to explicitly set the miniflow
+extraction function pointer on different PMD threads.
+
+Scalar can be selected on core 3 by the following command where
+study count can be put as any arbitary number or left blank::
+
+    $ ovs-appctl dpif-netdev/miniflow-parser-set -pmd 3 scalar
 
 Miniflow Extract Validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
