@@ -304,7 +304,7 @@ ovs-appctl: ovs-vswitchd: server returned an error
 
 AT_CHECK([ovs-appctl dpif-netdev/miniflow-parser-set -pmd 6 study 300 xyz], [2],
 [], [dnl
-Error: Invalid study_pkt_cnt value: xyz.
+Error: invalid study_pkt_cnt value: xyz.
 ovs-appctl: ovs-vswitchd: server returned an error
 ])
 
@@ -334,7 +334,7 @@ ovs-appctl: ovs-vswitchd: server returned an error
 
 AT_CHECK([ovs-appctl dpif-netdev/miniflow-parser-set -pmd 7 study abcd], [2],
 [], [dnl
-Error: Invalid study_pkt_cnt value: abcd.
+Error: invalid study_pkt_cnt value: abcd.
 ovs-appctl: ovs-vswitchd: server returned an error
 ])
 
@@ -384,7 +384,7 @@ ovs-appctl: ovs-vswitchd: server returned an error
 
 AT_CHECK([ovs-appctl dpif-netdev/miniflow-parser-set -pmd 1 study -pmd], [2],
 [], [dnl
-Error: Invalid study_pkt_cnt value: -pmd.
+Error: invalid study_pkt_cnt value: -pmd.
 ovs-appctl: ovs-vswitchd: server returned an error
 ])
 
