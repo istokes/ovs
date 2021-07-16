@@ -1129,7 +1129,7 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
             if (!str_to_uint(argv[1], 10, &study_count) ||
                     (study_count == 0)) {
                 ds_put_format(&reply,
-                    "Error: Invalid study_pkt_cnt value: %s.\n", argv[1]);
+                    "Error: invalid study_pkt_cnt value: %s.\n", argv[1]);
                 goto error;
             }
 
@@ -1167,8 +1167,8 @@ dpif_miniflow_extract_impl_set(struct unixctl_conn *conn, int argc,
         err = dp_mfex_impl_set_default_by_name(mfex_name);
         if (err == -ENODEV) {
             ds_put_format(&reply,
-              "Miniflow extract not available due to CPU ISA requirements: %s",
-              mfex_name);
+              "Error: miniflow extract not available due to CPU ISA"
+              " requirements: %s", mfex_name);
             goto error;
         } else if (err) {
             ds_put_format(&reply,
