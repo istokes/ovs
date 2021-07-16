@@ -227,6 +227,7 @@ struct pmd_auto_lb {
 enum sched_assignment_type {
     SCHED_ROUNDROBIN,
     SCHED_CYCLES, /* Default.*/
+    SCHED_GROUP,
     SCHED_MAX
 };
 
@@ -4220,6 +4221,8 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
         pmd_rxq_assign_type = SCHED_ROUNDROBIN;
     } else if (!strcmp(pmd_rxq_assign, "cycles")) {
         pmd_rxq_assign_type = SCHED_CYCLES;
+    } else if (!strcmp(pmd_rxq_assign, "group")) {
+        pmd_rxq_assign_type = SCHED_GROUP;
     } else {
         /* Default. */
         VLOG_WARN("Unsupported rx queue to PMD assignment mode in "
@@ -5062,6 +5065,34 @@ compare_rxq_cycles(const void *a, const void *b)
     }
 }
 
+static struct sched_pmd *
+sched_pmd_get_lowest(struct sched_numa *numa, bool has_cyc)
+{
+    struct sched_pmd *lowest_sched_pmd = NULL;
+    uint64_t lowest_num = UINT64_MAX;
+
+    for (unsigned i = 0; i < numa->n_pmds; i++) {
+        struct sched_pmd *sched_pmd;
+        uint64_t pmd_num;
+
+        sched_pmd = &numa->pmds[i];
+        if (sched_pmd->isolated) {
+            continue;
+        }
+        if (has_cyc) {
+            pmd_num = sched_pmd->pmd_proc_cycles;
+        } else {
+            pmd_num = sched_pmd->n_rxq;
+        }
+
+        if (pmd_num < lowest_num) {
+            lowest_num = pmd_num;
+            lowest_sched_pmd = sched_pmd;
+        }
+    }
+    return lowest_sched_pmd;
+}
+
 /*
  * Returns the next pmd from the numa node.
  *
@@ -5120,8 +5151,14 @@ sched_pmd_next_noniso_rr(struct sched_numa *numa, bool updown)
 }
 
 static struct sched_pmd *
-sched_pmd_next(struct sched_numa *numa, enum sched_assignment_type algo)
+sched_pmd_next(struct sched_numa *numa, enum sched_assignment_type algo,
+               bool has_proc)
 {
+    if (algo == SCHED_GROUP) {
+        return sched_pmd_get_lowest(numa, has_proc);
+    }
+
+    /* By default RR the PMDs. */
     return sched_pmd_next_noniso_rr(numa, algo == SCHED_CYCLES ? true : false);
 }
 
@@ -5131,6 +5168,7 @@ get_assignment_type_string(enum sched_assignment_type algo)
     switch (algo) {
     case SCHED_ROUNDROBIN: return "roundrobin";
     case SCHED_CYCLES: return "cycles";
+    case SCHED_GROUP: return "group";
     case SCHED_MAX:
     default: return "Unknown";
     }
@@ -5293,7 +5331,7 @@ sched_numa_list_schedule(struct sched_numa_list *numa_list,
             }
 
             /* Select the PMD that should be used for this rxq. */
-            sched_pmd = sched_pmd_next(numa, algo);
+            sched_pmd = sched_pmd_next(numa, algo, proc_cycles ? true : false);
             if (sched_pmd) {
                 VLOG(level, "Core %2u on numa node %d assigned port \'%s\' "
                             "rx queue %d%s.",
