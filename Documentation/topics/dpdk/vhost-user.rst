@@ -302,6 +302,54 @@ The default value is false.
     QEMU). Starting with QEMU v2.9.1, vhost-iommu-support can safely be
     enabled, even without having an IOMMU device, with no performance penalty.
 
+vhost-user-client Async copy Support (experimental)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+vhost async copy is a feature which utlizes DMA devices available on the
+platform through DPDK DMA-dev library to offload packet copy operation
+to and from the guest asynchronously.
+
+Async copy support may be enabled via a global config value,
+``vhost-async-support``. Setting this to true enables vhost async copy
+support for all vhost ports::
+
+    $ ovs-vsctl set Open_vSwitch . other_config:vhost-async-support=true
+
+The default value is ``false``.
+
+.. important::
+
+    Changing this value requires restarting the daemon.
+
+Please note that, it's required to have DMA devices visible to DPDK before OVS
+launch either by binding them to userspace driver vfio-pci or through other
+facilities as mentioned in the DPDK driver documentation.
+
+The current assignment model is 1 DMA device per data plane thread. If no DMA
+device is found for that thread, it will fall back to perform CPU copy.
+However, it's recommended to ensure there are enough DMAdev devices available
+before starting OVS. The NUMA aware assignment of DMAdev devices to
+data plane threads is automatically handled by iterating over the available
+DMAdev devices (based on dmadev-id) and assumes there is only 1 vchannel
+supported per device.
+
+Users can also set the threshold size(in bytes), at runtime, beyond which
+packets must be offloaded to DMA::
+
+    $ ovs-appctl netdev-dpdk/set-vhost-async-thresh <threshold_size>
+
+The default threshold size is set to ``128`` bytes.
+
+Similary, users can get the current threshold value using the command::
+
+    $ ovs-appctl netdev-dpdk/get-vhost-async-thresh
+
+
+.. important::
+
+    This feature requires DPDK version 22.11 along with few other patches.
+
+
 vhost-user-client Post-copy Live Migration Support (experimental)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

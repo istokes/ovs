@@ -1,5 +1,17 @@
 #!/usr/bin/python3
 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import sys
 import warnings
 
@@ -11,7 +23,8 @@ warnings.filterwarnings(
 )
 # flake8: noqa: E402
 from scapy.all import RandMAC, RandIP, PcapWriter, RandIP6, RandShort, fuzz
-from scapy.all import IPv6, Dot1Q, IP, Ether, UDP, TCP, random
+from scapy.all import IPv6, Dot1Q, IP, Ether, UDP, TCP, random, raw
+from scapy.utils import randstring
 
 # Path for the pcap file location.
 path = str(sys.argv[1])
@@ -49,6 +62,20 @@ for i in range(0, size):
         pkt.append(fuzz(eth / ipv6 / tcp))
         pkt.append(fuzz(eth / vlan / ipv6 / udp))
         pkt.append(fuzz(eth / vlan / ipv6 / tcp))
+
+    elif traffic_opt == "simple_udp":
+        mac_addr_src = "52:54:00:FF:FF:{:02X}".format(i % 0xff)
+        mac_addr_dst = "80:FF:FF:FF:FF:{:02X}".format(i % 0xff)
+        src_port = 200 + (i % 20)
+        dst_port = 1000 + (i % 20)
+        eth = Ether(src=mac_addr_src, dst=mac_addr_dst)
+        udp = UDP(dport=src_port, sport=dst_port)
+        # IPv4 address range limits to 255 and IPv6 limit to 65535
+        ipv4_addr_src = "192.168.150." + str((i % 255))
+        ipv4_addr_dst = "200.100.198." + str((i % 255))
+        ipv4 = IP(src=ipv4_addr_src, dst=ipv4_addr_dst)
+        # 1024 sized IPv4 packets
+        pkt.append(eth / ipv4 / udp / raw(randstring(length=982)))
 
     else:
         mac_addr_src = "52:54:00:FF:FF:{:02X}".format(i % 0xff)

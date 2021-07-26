@@ -31,6 +31,8 @@ struct netdev;
 
 void netdev_dpdk_register(const struct smap *);
 void free_dpdk_buf(struct dp_packet *);
+void dpdk_dmadev_assign(unsigned int pmd_core_id);
+void dpdk_dmadev_free(void);
 
 bool netdev_dpdk_flow_api_supported(struct netdev *);
 
@@ -154,6 +156,18 @@ static inline void
 free_dpdk_buf(struct dp_packet *buf OVS_UNUSED)
 {
     /* Nothing */
+}
+
+static inline void
+dpdk_dmadev_assign(unsigned int pmd_core_id OVS_UNUSED)
+{
+    /* Nothing. */
+}
+
+static inline void
+dpdk_dmadev_free(void)
+{
+    /* Nothing. */
 }
 
 #endif

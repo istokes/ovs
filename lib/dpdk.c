@@ -507,6 +507,7 @@ dpdk_attach_thread(unsigned cpu)
     }
 
     VLOG_INFO("PMD thread uses DPDK lcore %u.", rte_lcore_id());
+    dpdk_dmadev_assign(cpu);
     return true;
 }
 
@@ -516,6 +517,7 @@ dpdk_detach_thread(void)
     unsigned int lcore_id;
 
     lcore_id = rte_lcore_id();
+    dpdk_dmadev_free();
     rte_thread_unregister();
     VLOG_INFO("PMD thread released DPDK lcore %u.", lcore_id);
 }

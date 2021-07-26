@@ -12,3 +12,7 @@ Prints the debug information about memory pool used by DPDK \fIinterface\fR.
 If called without arguments, information of all the available mempools will
 be printed. For additional mempool statistics enable
 \fBCONFIG_RTE_LIBRTE_MEMPOOL_DEBUG\fR while building DPDK.
+.IP "\fBnetdev-dpdk/set-vhost-async-thresh\fR \fIthreshold_val\fR"
+Sets the global vhost async threshold to the given value in bytes.
+.IP "\fBnetdev-dpdk/get-vhost-async-thresh\fR"
+Gets the current global vhost async threshold value in bytes.

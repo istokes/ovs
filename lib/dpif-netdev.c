@@ -6937,6 +6937,11 @@ dpif_netdev_run(struct dpif *dpif)
             dp_netdev_pmd_flush_output_packets(non_pmd, false);
         }
 
+        /* Do any work outstanding on this PMD thread. */
+        struct dp_defer *defer = &non_pmd->defer;
+        struct pmd_perf_stats *s = &non_pmd->perf_stats;
+        dp_defer_do_all_work(defer, s);
+
         dpif_netdev_xps_revalidate_pmd(non_pmd, false);
         ovs_mutex_unlock(&dp->non_pmd_mutex);
 
@@ -7315,6 +7320,13 @@ reload:
         if (OVS_UNLIKELY(reload)) {
             /* Do any work outstanding on this PMD thread. */
             dp_defer_do_all_work(defer, s);
+            /* Drain all rxq before pmd is reloaded. */
+            for (i = 0; i < poll_cnt; i++) {
+                if (!poll_list[i].rxq_enabled) {
+                    continue;
+                }
+                netdev_rxq_drain(poll_list[i].rxq->rx);
+            }
             break;
         }
 

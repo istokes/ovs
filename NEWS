@@ -132,6 +132,8 @@ v3.0.0 - 15 Aug 2022
      * Add build time configure command to enable auto-validator as default
        actions implementation at build time.
      * Add AVX512 implementation of actions.
+     * Add vHost async path support to offload packets to/from guest to DPDK
+       DMA-dev devices.
    - Debian packaging updated to be on par with package source in Debian/Ubuntu.
      * Provided an openvswitch-switch-dpdk package that integrates with the
        dpdk package in the distributions so that end users can opt into a

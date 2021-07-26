@@ -31,6 +31,7 @@
 #include <rte_config.h>
 #include <rte_cycles.h>
 #include <rte_dev.h>
+#include <rte_dmadev.h>
 #include <rte_errno.h>
 #include <rte_ethdev.h>
 #include <rte_flow.h>
@@ -40,6 +41,7 @@
 #include <rte_pci.h>
 #include <rte_version.h>
 #include <rte_vhost.h>
+#include <rte_vhost_async.h>
 
 #include "cmap.h"
 #include "coverage.h"
@@ -79,11 +81,20 @@ VLOG_DEFINE_THIS_MODULE(netdev_dpdk);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
 COVERAGE_DEFINE(vhost_tx_contention);
+COVERAGE_DEFINE(vhost_async_tx_poll);
+COVERAGE_DEFINE(vhost_async_tx_poll_empty);
+COVERAGE_DEFINE(vhost_async_rx_poll);
+COVERAGE_DEFINE(vhost_async_rx_poll_empty);
+COVERAGE_DEFINE(vhost_async_rx_enqueue);
+COVERAGE_DEFINE(vhost_async_tx_enqueue);
+COVERAGE_DEFINE(vhost_async_tx_burst_ring_full);
 
 static char *vhost_sock_dir = NULL;   /* Location of vhost-user sockets */
 static bool vhost_iommu_enabled = false; /* Status of vHost IOMMU support */
 static bool vhost_postcopy_enabled = false; /* Status of vHost POSTCOPY
                                              * support. */
+static bool vhost_async_copy_enabled = false; /* Status of vhost async
+                                               * support. */
 static bool per_port_memory = false; /* Status of per port memory support */
 
 #define DPDK_PORT_WATCHDOG_INTERVAL 5
@@ -154,6 +165,9 @@ typedef uint16_t dpdk_port_t;
 
 #define IF_NAME_SZ (PATH_MAX > IFNAMSIZ ? PATH_MAX : IFNAMSIZ)
 
+/* vHost async DMA ring size. */
+#define VHOST_ASYNC_DMA_RING_SIZE 4096
+
 /* List of required flags advertised by the hardware that will be used
  * if TSO is enabled. Ideally this should include
  * RTE_ETH_TX_OFFLOAD_SCTP_CKSUM. However, very few drivers support that
@@ -198,6 +212,230 @@ static const struct rte_vhost_device_ops virtio_net_device_ops =
     .new_connection = NULL,
     .destroy_connection = destroy_connection,
 };
+
+#define DMADEV_ID_UNASSIGNED INT16_MAX
+/* If dmadev id is invalid for a PMD, it must fallback to CPU copy. */
+#define DMADEV_ID_INVALID RTE_VHOST_ASYNC_DMA_FALLBACK
+#define DMADEV_VCHAN_ID 0
+
+/* For vHost async datapath, dmadev id alloation is per dataplane thread. */
+DEFINE_STATIC_PER_THREAD_DATA(int16_t, dmadev_id, DMADEV_ID_UNASSIGNED);
+
+static atomic_uint16_t vhost_async_threshold = 128;
+
+static inline uint16_t
+dpdk_vhost_async_thresh(void)
+{
+    uint16_t thresh = 0;
+
+    atomic_read_relaxed(&vhost_async_threshold, &thresh);
+    return thresh;
+}
+
+enum dmadev_status{
+    VHOST_ASYNC_DMADEV_UNUSED,
+    VHOST_ASYNC_DMADEV_USED,
+    VHOST_ASYNC_DMADEV_ERR,
+};
+
+static enum dmadev_status dmadev_list[RTE_DMADEV_DEFAULT_MAX];
+static struct ovs_mutex dmadev_mutex = OVS_MUTEX_INITIALIZER;
+
+static int16_t
+dmadev_find_free_dev(int pmd_numa_id, struct rte_dma_info *dev_info)
+{
+    int16_t dmadev_id = 0;
+    int other_numa_dmadev_id = DMADEV_ID_INVALID;
+    uint64_t capab = RTE_DMA_CAPA_MEM_TO_MEM | RTE_DMA_CAPA_OPS_COPY;
+
+    for (dmadev_id = 0; dmadev_id < rte_dma_count_avail(); dmadev_id++) {
+        if (dmadev_list[dmadev_id] == VHOST_ASYNC_DMADEV_UNUSED &&
+                !rte_dma_info_get(dmadev_id, dev_info)) {
+            /* DMA device must be capable of:
+             * MEM to MEM COPY operation and have atleast 1 virtual channel.*/
+            if (!((dev_info->dev_capa & capab) && dev_info->max_vchans >= 1)) {
+                continue;
+            }
+
+            if (dev_info->numa_node == pmd_numa_id) {
+                return dmadev_id;
+            } else if (other_numa_dmadev_id == DMADEV_ID_INVALID) {
+                other_numa_dmadev_id = dmadev_id;
+            }
+        }
+    }
+
+    if (other_numa_dmadev_id != DMADEV_ID_INVALID) {
+        /* No DMA device found on same NUMA, hence
+         * allocating an available DMA from other NUMA. */
+        rte_dma_info_get(other_numa_dmadev_id, dev_info);
+        return other_numa_dmadev_id;
+    }
+
+    return DMADEV_ID_INVALID;
+}
+
+static int16_t
+dmadev_get_free_dev(int pmd_core_id, int pmd_numa_id)
+{
+    int16_t dmadev_id;
+    struct rte_dma_info dev_info = {0};
+    struct rte_dma_conf dev_conf = {0};
+    struct rte_dma_vchan_conf vchan_conf = {0};
+    size_t ring_size = VHOST_ASYNC_DMA_RING_SIZE;
+
+    dmadev_id = dmadev_find_free_dev(pmd_numa_id, &dev_info);
+
+    if (dmadev_id == DMADEV_ID_INVALID) {
+        VLOG_WARN("No available DMA device found for vhost async copy "
+                  "offload for this pmd. Using software copy as fallback.");
+        goto out;
+    }
+
+    /* Configure the device. */
+    dev_conf.nb_vchans = 1;
+    dev_conf.enable_silent = false;
+    int ret = rte_dma_configure(dmadev_id, &dev_conf);
+    if (OVS_UNLIKELY(ret)) {
+        VLOG_ERR("Configure failed for DMA device %s with dev id: %u "
+                 "while assigning to pmd for vhost async copy offload. "
+                 "Using software copy as fallback.",
+                 dev_info.dev_name, dmadev_id);
+        dmadev_list[dmadev_id] = VHOST_ASYNC_DMADEV_ERR;
+        dmadev_id = DMADEV_ID_INVALID;
+    } else {
+        vchan_conf.direction = RTE_DMA_DIR_MEM_TO_MEM;
+        vchan_conf.nb_desc = ring_size;
+        ret = rte_dma_vchan_setup(dmadev_id, DMADEV_VCHAN_ID, &vchan_conf);
+        if (ret < 0) {
+            VLOG_ERR("Virtual channel setup failed with err %d for "
+                     "DMA device %s with dev id: %d. "
+                     "Using software copy as fallback.",
+                     ret, dev_info.dev_name, dmadev_id);
+            dmadev_list[dmadev_id] = VHOST_ASYNC_DMADEV_ERR;
+            dmadev_id = DMADEV_ID_INVALID;
+            goto out;
+        }
+
+        rte_dma_start(dmadev_id);
+
+        if (rte_vhost_async_dma_configure(dmadev_id, DMADEV_VCHAN_ID) < 0) {
+            VLOG_ERR("Failed to configure DMA device %s with device id %u "
+                     "in vhost. Using software copy as fallback.",
+                     dev_info.dev_name, dmadev_id);
+            rte_dma_stop(dmadev_id);
+            dmadev_list[dmadev_id] = VHOST_ASYNC_DMADEV_ERR;
+            dmadev_id = DMADEV_ID_INVALID;
+            goto out;
+        }
+
+        if (dev_info.numa_node != pmd_numa_id) {
+            VLOG_WARN("No available DMA device on same numa as PMD."
+                      "DMA device %s with dev id: %d on NUMA: %d assigned to "
+                      "pmd %d on NUMA: %d for vhost async copy offload.",
+                      dev_info.dev_name, dmadev_id, dev_info.numa_node,
+                      pmd_core_id, pmd_numa_id);
+        } else {
+            VLOG_INFO("DMA device %s with dev id: %d on NUMA: %d assigned to "
+                      "pmd %d on NUMA: %d for vhost async copy offload.",
+                      dev_info.dev_name, dmadev_id, dev_info.numa_node,
+                      pmd_core_id, pmd_numa_id);
+        }
+        dmadev_list[dmadev_id] = VHOST_ASYNC_DMADEV_USED;
+    }
+
+out:
+    return dmadev_id;
+}
+
+static int16_t
+dmadev_id_init(unsigned int pmd_core_id)
+{
+    int16_t new_id = *dmadev_id_get();
+    int pmd_numa_id = ovs_numa_get_numa_id(pmd_core_id);
+
+    new_id = *dmadev_id_get();
+
+    ovs_assert(new_id == DMADEV_ID_UNASSIGNED);
+    ovs_mutex_lock(&dmadev_mutex);
+    new_id = dmadev_get_free_dev(pmd_core_id, pmd_numa_id);
+    ovs_mutex_unlock(&dmadev_mutex);
+
+    return *dmadev_id_get() = new_id;
+}
+
+static int16_t
+dmadev_get_device(void)
+{
+    int16_t id = *dmadev_id_get();
+
+    /* If the thread is not a PMD, i.e pmd->core_id = NON_PMD_CORE_ID,
+     * then set dmadev_id to DMADEV_ID_INVALID.
+     * dpdk_dmadev_assign() is called only for PMD threads, since
+     * non PMD thread is not expected to handle much of the ovs traffc,
+     * assinging a dmadev for this thread is not useful. */
+    if (id == DMADEV_ID_UNASSIGNED) {
+        id = *dmadev_id_get() = DMADEV_ID_INVALID;
+    }
+    return id;
+}
+
+void
+dpdk_dmadev_assign(unsigned int pmd_core_id)
+{
+    int16_t id;
+
+    if (!vhost_async_copy_enabled) {
+        return;
+    }
+
+    id = *dmadev_id_get();
+
+    if (id == DMADEV_ID_UNASSIGNED) {
+        id = dmadev_id_init(pmd_core_id);
+    }
+}
+
+void
+dpdk_dmadev_free(void)
+{
+    int16_t dmadev_id;
+    struct rte_dma_stats stats;
+
+    if (!vhost_async_copy_enabled) {
+        return;
+    }
+
+    dmadev_id = dmadev_get_device();
+    if (dmadev_id == DMADEV_ID_INVALID) {
+        return;
+    }
+
+    ovs_mutex_lock(&dmadev_mutex);
+    rte_vhost_async_dma_unconfigure(dmadev_id, DMADEV_VCHAN_ID);
+    rte_dma_stats_get(dmadev_id, DMADEV_VCHAN_ID, &stats);
+    rte_dma_stop(dmadev_id);
+    dmadev_list[dmadev_id] = VHOST_ASYNC_DMADEV_UNUSED;
+    ovs_mutex_unlock(&dmadev_mutex);
+    *dmadev_id_get() = DMADEV_ID_UNASSIGNED;
+    VLOG_INFO("DMA device with dev id: %u stats: submitted: %lu, completed: "
+              "%lu, errors: %lu\n\n", dmadev_id, stats.submitted,
+               stats.completed, stats.errors);
+    VLOG_INFO("DMA device with dev id: %d used for vhost async copy offload "
+              "released from pmd.", dmadev_id);
+}
+
+static bool
+dpdk_dmadev_has_inflight(int16_t dmadev_id)
+{
+    struct rte_dma_stats dma_stats = {0};
+
+    if (dmadev_id == DMADEV_ID_INVALID) {
+        return false;
+    }
+    rte_dma_stats_get(dmadev_id, DMADEV_VCHAN_ID, &dma_stats);
+    return (dma_stats.completed + dma_stats.errors) < dma_stats.submitted;
+}
 
 /* Custom software stats for dpdk ports */
 struct netdev_dpdk_sw_stats {
@@ -386,6 +624,18 @@ struct user_mempool_config {
 static struct user_mempool_config *user_mempools = NULL;
 static int n_user_mempools;
 
+/* Ring to keep track of packets per burst.
+ * Ring size same as defer work queue size. */
+#define BURST_RING_SIZE 256
+#define BURST_RING_MASK (BURST_RING_SIZE - 1)
+struct burst_ring_t {
+    uint8_t burst_info[BURST_RING_SIZE];
+    uint16_t count;
+    uint8_t read_idx;
+    uint8_t write_idx;
+    uint8_t burst_completed;
+};
+
 /* There should be one 'struct dpdk_tx_queue' created for
  * each netdev tx queue. */
 struct dpdk_tx_queue {
@@ -395,6 +645,13 @@ struct dpdk_tx_queue {
          * It is used only if the queue is shared among different pmd threads
          * (see 'concurrent_txq'). */
         rte_spinlock_t tx_lock;
+
+        /* vHost asynchronous channel registration status. */
+        bool is_async_reg;
+
+        /* Ring to have the burst info. */
+        struct burst_ring_t *burst_ring;
+
         /* Mapping of configured vhost-user queue to enabled by guest. */
         int map;
     );
@@ -489,6 +746,8 @@ struct netdev_dpdk {
 
         /* Array of vhost rxq states, see vring_state_changed. */
         bool *vhost_rxq_enabled;
+        /* Array of vhost rxq async registration status. */
+        bool *vhost_rxq_async_reg;
     );
 
     PADDED_MEMBERS(CACHE_LINE_SIZE,
@@ -1256,18 +1515,36 @@ netdev_dpdk_alloc(void)
 }
 
 static struct dpdk_tx_queue *
-netdev_dpdk_alloc_txq(unsigned int n_txqs)
+netdev_dpdk_alloc_txq(unsigned int n_txqs, bool is_vhost)
 {
     struct dpdk_tx_queue *txqs;
     unsigned i;
+    const bool is_vhost_async = is_vhost && vhost_async_copy_enabled;
+    bool alloc_failed = false;
+    size_t ring_size = sizeof(struct burst_ring_t);
 
     txqs = dpdk_rte_mzalloc(n_txqs * sizeof *txqs);
     if (txqs) {
         for (i = 0; i < n_txqs; i++) {
+            if (is_vhost_async) {
+                txqs[i].burst_ring = dpdk_rte_mzalloc(ring_size);
+                if (!txqs[i].burst_ring) {
+                    alloc_failed = true;
+                    break;
+                }
+            }
             /* Initialize map for vhost devices. */
             txqs[i].map = OVS_VHOST_QUEUE_MAP_UNKNOWN;
             rte_spinlock_init(&txqs[i].tx_lock);
         }
+    }
+
+
+    if (alloc_failed) {
+        for (int j = 0; j < i; j++) {
+            rte_free(txqs[j].burst_ring);
+        }
+        rte_free(txqs);
     }
 
     return txqs;
@@ -1350,9 +1627,18 @@ vhost_common_construct(struct netdev *netdev)
     if (!dev->vhost_rxq_enabled) {
         return ENOMEM;
     }
-    dev->tx_q = netdev_dpdk_alloc_txq(OVS_VHOST_MAX_QUEUE_NUM);
+
+    dev->vhost_rxq_async_reg = dpdk_rte_mzalloc(OVS_VHOST_MAX_QUEUE_NUM *
+                                                sizeof(bool));
+    if (!dev->vhost_rxq_async_reg) {
+        rte_free(dev->vhost_rxq_enabled);
+        return ENOMEM;
+    }
+
+    dev->tx_q = netdev_dpdk_alloc_txq(OVS_VHOST_MAX_QUEUE_NUM, true);
     if (!dev->tx_q) {
         rte_free(dev->vhost_rxq_enabled);
+        rte_free(dev->vhost_rxq_async_reg);
         return ENOMEM;
     }
 
@@ -1389,6 +1675,11 @@ netdev_dpdk_vhost_construct(struct netdev *netdev)
 
     /* There is no support for multi-segments buffers. */
     dev->vhost_driver_flags |= RTE_VHOST_USER_LINEARBUF_SUPPORT;
+
+    /* Enable async copy flag, if explicitly requested. */
+    if (vhost_async_copy_enabled) {
+        dev->vhost_driver_flags |= RTE_VHOST_USER_ASYNC_COPY;
+    }
     err = rte_vhost_driver_register(dev->vhost_id, dev->vhost_driver_flags);
     if (err) {
         VLOG_ERR("vhost-user socket device setup failure for socket %s\n",
@@ -1589,6 +1880,13 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
     vhost_id = dev->vhost_id;
     dev->vhost_id = NULL;
     rte_free(dev->vhost_rxq_enabled);
+    rte_free(dev->vhost_rxq_async_reg);
+
+    if (dev->vhost_driver_flags & RTE_VHOST_USER_ASYNC_COPY) {
+        for (int i = 0; i < OVS_VHOST_MAX_QUEUE_NUM; i++) {
+            rte_free(dev->tx_q[i].burst_ring);
+        }
+    }
 
     common_destruct(dev);
 
@@ -2369,17 +2667,35 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
     uint16_t qos_drops = 0;
     int qid = rxq->queue_id * VIRTIO_QNUM + VIRTIO_TXQ;
     int vid = netdev_dpdk_get_vid(dev);
+    int async_inflight = 0;
 
     if (OVS_UNLIKELY(vid < 0 || !dev->vhost_reconfigured
                      || !(dev->flags & NETDEV_UP))) {
         return EAGAIN;
     }
 
-    nb_rx = rte_vhost_dequeue_burst(vid, qid, dev->dpdk_mp->mp,
-                                    (struct rte_mbuf **) batch->packets,
-                                    NETDEV_MAX_BURST);
-    if (!nb_rx) {
-        return EAGAIN;
+    if (dev->vhost_rxq_async_reg[rxq->queue_id]) {
+        nb_rx = rte_vhost_async_try_dequeue_burst(vid, qid, dev->dpdk_mp->mp,
+                                                  (struct rte_mbuf **)
+                                                  batch->packets,
+                                                  NETDEV_MAX_BURST,
+                                                  &async_inflight,
+                                                  dmadev_get_device(),
+                                                  DMADEV_VCHAN_ID,
+                                                  dpdk_vhost_async_thresh());
+        COVERAGE_INC(vhost_async_rx_poll);
+        if (!nb_rx) {
+            COVERAGE_INC(vhost_async_rx_poll_empty);
+            return EAGAIN;
+        }
+        COVERAGE_ADD(vhost_async_rx_enqueue, nb_rx);
+    } else {
+        nb_rx = rte_vhost_dequeue_burst(vid, qid, dev->dpdk_mp->mp,
+                                        (struct rte_mbuf **) batch->packets,
+                                        NETDEV_MAX_BURST);
+        if (!nb_rx) {
+            return EAGAIN;
+        }
     }
 
     if (qfill) {
@@ -2409,6 +2725,54 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
 
     batch->count = nb_rx;
     dp_packet_batch_init_packet_fields(batch);
+
+    return 0;
+}
+
+static int
+netdev_dpdk_vhost_rxq_drain(struct netdev_rxq *rxq)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(rxq->netdev);
+    int rx_qid = rxq->queue_id * VIRTIO_QNUM + VIRTIO_TXQ;
+    uint16_t n_drops = 0;
+    int async_inflight = 0;
+    int vid = netdev_dpdk_get_vid(dev);
+
+    if (OVS_UNLIKELY(vid < 0 || !dev->vhost_reconfigured || rx_qid < 0
+                     || !(dev->flags & NETDEV_UP))) {
+        return 0;
+    }
+
+    if (!dev->vhost_rxq_async_reg[rxq->queue_id]) {
+        return 0;
+    }
+
+    async_inflight = rte_vhost_async_get_inflight(vid, rx_qid);
+    VLOG_INFO("Draining Rx async inflight packets for vid: %d, qid: %u, "
+              "inflight: %u", vid, rx_qid, async_inflight);
+    while ((async_inflight > 0)
+                || dpdk_dmadev_has_inflight(dmadev_get_device())) {
+        /* If there are inflight packets left on the DMA,
+         * poll for completions through an RXQ. */
+        struct dp_packet *inflight_pkts[NETDEV_MAX_BURST];
+        n_drops = rte_vhost_clear_queue(vid, rx_qid,
+                                        (struct rte_mbuf **)
+                                        inflight_pkts,
+                                        NETDEV_MAX_BURST,
+                                        dmadev_get_device(),
+                                        DMADEV_VCHAN_ID);
+        if (!n_drops) {
+            continue;
+        }
+        rte_spinlock_lock(&dev->stats_lock);
+        dev->stats.rx_dropped += n_drops;
+        rte_spinlock_unlock(&dev->stats_lock);
+
+        for (int i = 0; i < n_drops; i++) {
+            dp_packet_delete(inflight_pkts[i]);
+        }
+        async_inflight -= n_drops;
+    }
 
     return 0;
 }
@@ -2514,6 +2878,153 @@ netdev_dpdk_filter_packet_len(struct netdev_dpdk *dev, struct rte_mbuf **pkts,
     }
 
     return cnt;
+}
+
+/* Checks if the burst_ring ring is full. */
+static inline bool
+is_burst_ring_full(const struct burst_ring_t *b_ring)
+{
+    return b_ring->count == BURST_RING_SIZE;
+}
+
+/* Adds an entry into the burst tracking ring. */
+static inline void
+burst_entry_add(struct burst_ring_t *b_ring, const uint8_t n_packets)
+{
+    b_ring->burst_info[b_ring->write_idx++] = n_packets;
+    b_ring->write_idx &= (BURST_RING_SIZE - 1);
+    b_ring->count++;
+}
+
+static inline bool
+count_burst_completed(struct burst_ring_t *b_ring, const int nr_xfrd_pkts)
+{
+    int pkts = 0;
+
+    while (nr_xfrd_pkts > pkts) {
+        pkts += b_ring->burst_info[b_ring->read_idx];
+        b_ring->burst_info[b_ring->read_idx++] = 0;
+        b_ring->count--;
+        b_ring->read_idx &= BURST_RING_MASK;
+        b_ring->burst_completed++;
+    }
+
+    pkts -= nr_xfrd_pkts;
+    if (pkts) {
+        --b_ring->read_idx;
+        b_ring->read_idx &= BURST_RING_MASK;
+        b_ring->burst_info[b_ring->read_idx] = pkts;
+        b_ring->count++;
+        b_ring->burst_completed--;
+    }
+
+    if (b_ring->burst_completed) {
+        b_ring->burst_completed--;
+        return true;
+    }
+
+    return false;
+}
+
+static void
+netdev_dpdk_vhost_clear_queue(struct netdev_dpdk *dev, const int vid,
+                              const int virtq_id, const bool is_rx)
+{
+    uint16_t dma_count = rte_dma_count_avail();
+    int async_inflight = 0;
+    uint16_t nr_dropped;
+
+    async_inflight = rte_vhost_async_get_inflight(vid, virtq_id);
+    VLOG_INFO("Clearing async inflight packets for vid: %d, qid: %u, "
+              "inflight: %d", vid, virtq_id, async_inflight);
+
+    while (async_inflight > 0) {
+        for (int dmadev_id = 0; dmadev_id < dma_count; dmadev_id++) {
+            ovs_mutex_lock(&dmadev_mutex);
+            if (dmadev_list[dmadev_id] == VHOST_ASYNC_DMADEV_ERR) {
+                ovs_mutex_unlock(&dmadev_mutex);
+                continue;
+            }
+            if (dmadev_list[dmadev_id] == VHOST_ASYNC_DMADEV_UNUSED) {
+                ovs_mutex_unlock(&dmadev_mutex);
+                break;
+            }
+
+            struct dp_packet *inflight_pkts[NETDEV_MAX_BURST];
+            nr_dropped = rte_vhost_clear_queue(vid,
+                                            virtq_id,
+                                            (struct rte_mbuf **)
+                                            inflight_pkts,
+                                            NETDEV_MAX_BURST,
+                                            dmadev_id,
+                                            DMADEV_VCHAN_ID);
+            ovs_mutex_unlock(&dmadev_mutex);
+            rte_spinlock_lock(&dev->stats_lock);
+            if (is_rx) {
+                dev->stats.rx_dropped += nr_dropped;
+            } else {
+                dev->stats.tx_dropped += nr_dropped;
+            }
+            rte_spinlock_unlock(&dev->stats_lock);
+
+            for (int i = 0; i < nr_dropped; i++) {
+                dp_packet_delete(inflight_pkts[i]);
+            }
+            async_inflight -= nr_dropped;
+            if (!async_inflight) {
+                return;
+            }
+        }
+    }
+}
+
+/* Free the packets sent via the async data path. */
+static int
+netdev_dpdk_vhost_async_tx_free(struct netdev *netdev, int qid,
+                                bool force OVS_UNUSED)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    struct dp_packet *cmpl_pkts[NETDEV_MAX_BURST];
+    int vid = netdev_dpdk_get_vid(dev);
+    uint16_t nr_xfrd_pkts = 0;
+    qid = dev->tx_q[qid].map;
+    int ret = 0;
+
+    if (OVS_UNLIKELY(vid < 0 || !dev->vhost_reconfigured || qid < 0
+                     || !(dev->flags & NETDEV_UP))) {
+        return 0;
+    }
+
+    if (OVS_UNLIKELY(!rte_spinlock_trylock(&dev->tx_q[qid].tx_lock))) {
+        COVERAGE_INC(vhost_tx_contention);
+        rte_spinlock_lock(&dev->tx_q[qid].tx_lock);
+    }
+
+    const uint16_t vhost_qid = qid * VIRTIO_QNUM + VIRTIO_RXQ;
+    /* Get the completion status of async transfer. */
+    nr_xfrd_pkts = rte_vhost_poll_enqueue_completed(vid, vhost_qid,
+                                                    (struct rte_mbuf **)
+                                                    cmpl_pkts,
+                                                    NETDEV_MAX_BURST,
+                                                    dmadev_get_device(),
+                                                    DMADEV_VCHAN_ID);
+     /* Check if there are any completed bursts, if not, return EINPROGRESS. */
+    if (!count_burst_completed(dev->tx_q[qid].burst_ring, nr_xfrd_pkts)) {
+        ret = -EINPROGRESS;
+    }
+    rte_spinlock_unlock(&dev->tx_q[qid].tx_lock);
+
+    COVERAGE_INC(vhost_async_tx_poll);
+    if (!nr_xfrd_pkts) {
+        COVERAGE_INC(vhost_async_tx_poll_empty);
+        return ret;
+    }
+
+    for (int i = 0; i < nr_xfrd_pkts; i++) {
+        dp_packet_delete(cmpl_pkts[i]);
+    }
+
+    return ret;
 }
 
 static void
@@ -2697,7 +3208,10 @@ netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     struct netdev_dpdk_sw_stats stats;
     struct rte_mbuf **pkts;
     int dropped;
+    bool is_async = false;
+    int n_inflight = 0;
     int retries;
+    int ret = 0;
 
     batch_cnt = cnt = dp_packet_batch_size(batch);
     qid = dev->tx_q[qid % netdev->n_txq].map;
@@ -2721,11 +3235,29 @@ netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     pkts = (struct rte_mbuf **) batch->packets;
     vhost_batch_cnt = cnt;
     retries = 0;
+
+    is_async = dev->tx_q[qid].is_async_reg;
+
+    if (OVS_UNLIKELY(is_async &&
+                is_burst_ring_full(dev->tx_q[qid].burst_ring))) {
+        COVERAGE_INC(vhost_async_tx_burst_ring_full);
+        goto unlock;
+    }
+
     do {
         int vhost_qid = qid * VIRTIO_QNUM + VIRTIO_RXQ;
         int tx_pkts;
 
-        tx_pkts = rte_vhost_enqueue_burst(vid, vhost_qid, pkts, cnt);
+        if (is_async) {
+            tx_pkts = rte_vhost_submit_enqueue_burst(vid, vhost_qid, pkts, cnt,
+                                                    dmadev_get_device(),
+                                                    DMADEV_VCHAN_ID,
+                                                    dpdk_vhost_async_thresh());
+            n_inflight += tx_pkts;
+        } else {
+            tx_pkts = rte_vhost_enqueue_burst(vid, vhost_qid, pkts, cnt);
+        }
+
         if (OVS_LIKELY(tx_pkts)) {
             /* Packets have been sent.*/
             cnt -= tx_pkts;
@@ -2744,6 +3276,12 @@ netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
         }
     } while (cnt && (retries++ < max_retries));
 
+    if (is_async && n_inflight) {
+        burst_entry_add(dev->tx_q[qid].burst_ring, n_inflight);
+        COVERAGE_ADD(vhost_async_tx_enqueue, n_inflight);
+        ret = -EINPROGRESS;
+    }
+unlock:
     rte_spinlock_unlock(&dev->tx_q[qid].tx_lock);
 
     stats.tx_failure_drops += cnt;
@@ -2764,9 +3302,11 @@ netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     }
 
     pkts = (struct rte_mbuf **) batch->packets;
-    rte_pktmbuf_free_bulk(pkts, vhost_batch_cnt);
+    /* Since dropped packets are at the end of the burst for async,
+     * update ptr and count to delete the packets dropped in current burst. */
+    rte_pktmbuf_free_bulk(pkts + n_inflight, vhost_batch_cnt - n_inflight);
 
-    return 0;
+    return ret;
 }
 
 static int
@@ -4055,6 +4595,55 @@ out:
     netdev_close(netdev);
 }
 
+static void
+netdev_dpdk_set_vhost_async_thresh(struct unixctl_conn *conn,
+                             int argc, const char *argv[],
+                             void *aux OVS_UNUSED)
+{
+    char *response = NULL;
+    char *end = NULL;
+
+    if (!vhost_async_copy_enabled) {
+        unixctl_command_reply_error(conn, "vhost async feature not enabled.");
+        goto out;
+    }
+
+    long thresh_in = strtol(argv[argc - 1], &end, 10);
+    if (errno == ERANGE || end == argv[argc - 1] || *end != '\0'
+            || thresh_in < 0 || thresh_in > NETDEV_DPDK_MAX_PKT_LEN) {
+        response = xasprintf("%ld is not a valid threshold."
+                                "Threshold must be >= 0 and <= %u",
+                                thresh_in, NETDEV_DPDK_MAX_PKT_LEN);
+        unixctl_command_reply(conn, response);
+        goto out;
+    }
+    atomic_store_relaxed(&vhost_async_threshold, (uint16_t) thresh_in);
+    VLOG_INFO("vhost_async_threshold set to: %u", (uint16_t) thresh_in);
+    unixctl_command_reply(conn, "OK");
+
+out:
+    free(response);
+}
+
+static void
+netdev_dpdk_get_vhost_async_thresh(struct unixctl_conn *conn,
+                             int argc OVS_UNUSED,
+                             const char *argv[] OVS_UNUSED,
+                             void *aux OVS_UNUSED)
+{
+    char *response = NULL;
+
+    if (vhost_async_copy_enabled) {
+        response = xasprintf("Current vhost async threshold is: %u",
+                             dpdk_vhost_async_thresh());
+        unixctl_command_reply(conn, response);
+    } else {
+        unixctl_command_reply_error(conn, "vhost async feature not enabled.");
+    }
+
+    free(response);
+}
+
 /*
  * Set virtqueue flags so that we do not receive interrupts.
  */
@@ -4197,6 +4786,84 @@ netdev_dpdk_txq_map_clear(struct netdev_dpdk *dev)
     }
 }
 
+/* Register vHost async queue. */
+static void
+netdev_dpdk_vhost_async_queue_reg(struct netdev_dpdk *dev, const int vid,
+                                  const int qid, const int virtq_id,
+                                  const bool is_rx)
+{
+    bool is_async, is_reg;
+    int ret;
+
+    if (OVS_UNLIKELY(vid < 0 || !dev || qid < 0)) {
+        return;
+    }
+
+    is_async = dev->vhost_driver_flags & RTE_VHOST_USER_ASYNC_COPY;
+    is_reg = is_rx ? dev->vhost_rxq_async_reg[qid] :
+                     dev->tx_q[qid].is_async_reg;
+    if (!is_async || is_reg) {
+        return;
+    }
+
+    ret = rte_vhost_async_channel_register(vid, virtq_id);
+    if (ret) {
+        if (is_rx) {
+            dev->vhost_rxq_async_reg[qid] = false;
+        } else {
+            dev->tx_q[qid].is_async_reg = false;
+        }
+        VLOG_ERR("Async channel register failed for vid: %d, queue: %s%d "
+                 "with status: %d", vid, is_rx ? "rxq" : "txq", qid, ret);
+    }
+
+    if (is_rx) {
+        dev->vhost_rxq_async_reg[qid] = true;
+    } else {
+        dev->tx_q[qid].is_async_reg = true;
+    }
+
+    VLOG_INFO("Async channel register success for vid: %d, queue: %s%d",
+               vid, is_rx ? "rxq" : "txq", qid);
+}
+
+/* Unregister vHost async queue. */
+static void
+netdev_dpdk_vhost_async_queue_unreg(struct netdev_dpdk *dev, const int vid,
+                                    const int qid, const int virtq_id,
+                                    const bool is_rx)
+{
+    bool is_async, is_reg;
+    int ret;
+
+    if (OVS_UNLIKELY(vid < 0 || !dev || qid < 0)) {
+        return;
+    }
+
+    is_async = dev->vhost_driver_flags & RTE_VHOST_USER_ASYNC_COPY;
+    is_reg = is_rx ? dev->vhost_rxq_async_reg[qid] :
+                     dev->tx_q[qid].is_async_reg;
+    if (!is_async || !is_reg) {
+        return;
+    }
+
+    netdev_dpdk_vhost_clear_queue(dev, vid, virtq_id, is_rx);
+    ret = rte_vhost_async_channel_unregister(vid, virtq_id);
+    if (ret) {
+        VLOG_ERR("Async channel unregister failed for vid: %d, queue: %s%d "
+                 "with status: %d", vid, is_rx ? "rxq" : "txq", qid, ret);
+    }
+
+    if (is_rx) {
+        dev->vhost_rxq_async_reg[qid] = false;
+    } else {
+        dev->tx_q[qid].is_async_reg = false;
+    }
+
+    VLOG_INFO("Async channel unregister success for vid: %d, queue: %s%d",
+               vid, is_rx ? "rxq" : "txq", qid);
+}
+
 /*
  * Remove a virtio-net device from the specific vhost port.  Use dev->remove
  * flag to stop any more packets from being sent or received to/from a VM and
@@ -4215,6 +4882,17 @@ destroy_device(int vid)
     ovs_mutex_lock(&dpdk_mutex);
     LIST_FOR_EACH (dev, list_node, &dpdk_list) {
         if (netdev_dpdk_get_vid(dev) == vid) {
+            for (int qid = 0; qid < dev->up.n_txq; qid++) {
+                const int mapped_qid = dev->tx_q[qid].map;
+                const int virtq_id = qid * VIRTIO_QNUM + VIRTIO_RXQ;
+                netdev_dpdk_vhost_async_queue_unreg(dev, vid, mapped_qid,
+                                                    virtq_id, false);
+            }
+            for (int qid = 0; qid < dev->up.n_rxq; qid++) {
+                const int virtq_id = qid * VIRTIO_QNUM + VIRTIO_TXQ;
+                netdev_dpdk_vhost_async_queue_unreg(dev, vid, qid,
+                                                    virtq_id, true);
+            }
 
             ovs_mutex_lock(&dev->mutex);
             dev->vhost_reconfigured = false;
@@ -4257,6 +4935,7 @@ struct vhost_state_change {
     struct mpsc_queue_node node;
     char ifname[IF_NAME_SZ];
     uint16_t queue_id;
+    int vid;
     int enable;
 };
 
@@ -4276,13 +4955,24 @@ vring_state_changed__(struct vhost_state_change *sc)
                 bool old_state = dev->vhost_rxq_enabled[qid];
 
                 dev->vhost_rxq_enabled[qid] = sc->enable != 0;
+                if (sc->enable) {
+                    netdev_dpdk_vhost_async_queue_reg(dev, sc->vid, qid,
+                                                      sc->queue_id, is_rx);
+                } else {
+                    netdev_dpdk_vhost_async_queue_unreg(dev, sc->vid, qid,
+                                                        sc->queue_id, is_rx);
+                }
                 if (old_state != dev->vhost_rxq_enabled[qid]) {
                     netdev_change_seq_changed(&dev->up);
                 }
             } else {
                 if (sc->enable) {
                     dev->tx_q[qid].map = qid;
+                    netdev_dpdk_vhost_async_queue_reg(dev, sc->vid, qid,
+                                                      sc->queue_id, is_rx);
                 } else {
+                    netdev_dpdk_vhost_async_queue_unreg(dev, sc->vid, qid,
+                                                        sc->queue_id, is_rx);
                     dev->tx_q[qid].map = OVS_VHOST_QUEUE_DISABLED;
                 }
                 netdev_dpdk_remap_txqs(dev);
@@ -4351,6 +5041,7 @@ vring_state_changed(int vid, uint16_t queue_id, int enable)
 
         sc->queue_id = queue_id;
         sc->enable = enable;
+        sc->vid = vid;
         mpsc_queue_insert(&vhost_state_change_queue, &sc->node);
         queue_size = atomic_count_inc64(&vhost_state_change_queue_size);
         if (queue_size >= 1000) {
@@ -4448,6 +5139,14 @@ netdev_dpdk_class_init(void)
         unixctl_command_register("netdev-dpdk/get-mempool-info",
                                  "[netdev]", 0, 1,
                                  netdev_dpdk_get_mempool_info, NULL);
+
+        unixctl_command_register("netdev-dpdk/set-vhost-async-thresh",
+                                 "vhost async threshold", 1, 1,
+                                 netdev_dpdk_set_vhost_async_thresh, NULL);
+
+        unixctl_command_register("netdev-dpdk/get-vhost-async-thresh",
+                                 "", 0, 0,
+                                 netdev_dpdk_get_vhost_async_thresh, NULL);
 
         ret = rte_eth_dev_callback_register(RTE_ETH_ALL,
                                             RTE_ETH_EVENT_INTR_RESET,
@@ -5255,7 +5954,7 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
      */
     dev->requested_hwaddr = dev->hwaddr;
 
-    dev->tx_q = netdev_dpdk_alloc_txq(netdev->n_txq);
+    dev->tx_q = netdev_dpdk_alloc_txq(netdev->n_txq, false);
     if (!dev->tx_q) {
         err = ENOMEM;
     }
@@ -5362,6 +6061,11 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
         /* Enable POSTCOPY support, if explicitly requested. */
         if (vhost_postcopy_enabled) {
             vhost_flags |= RTE_VHOST_USER_POSTCOPY_SUPPORT;
+        }
+
+        /* Enable async copy flag, if explicitly requested. */
+        if (vhost_async_copy_enabled) {
+            vhost_flags |= RTE_VHOST_USER_ASYNC_COPY;
         }
 
         /* Enable External Buffers if TCP Segmentation Offload is enabled. */
@@ -5768,6 +6472,25 @@ parse_vhost_config(const struct smap *ovs_other_config)
     }
     VLOG_INFO("POSTCOPY support for vhost-user-client %s.",
               vhost_postcopy_enabled ? "enabled" : "disabled");
+
+    vhost_async_copy_enabled = smap_get_bool(ovs_other_config,
+                                             "vhost-async-support", false);
+    if (vhost_async_copy_enabled) {
+        if (vhost_postcopy_enabled) {
+            VLOG_WARN("Async-copy and post-copy are not compatible for "
+                      "vhost-user-client. Post-copy support disabled.");
+            vhost_postcopy_enabled = false;
+        }
+
+        if (vhost_iommu_enabled) {
+            vhost_iommu_enabled = false;
+            VLOG_WARN("Async copy is not compatible with IOMMU support for "
+                      "vhost-user-client. IOMMU support disabled.");
+        }
+        VLOG_INFO("Async support enabled for vhost-user-client.");
+    } else {
+        VLOG_INFO("Async support disabled for vhost-user-client.");
+    }
 }
 
 #define NETDEV_DPDK_CLASS_COMMON                            \
@@ -5828,7 +6551,7 @@ static const struct netdev_class dpdk_vhost_class = {
     .construct = netdev_dpdk_vhost_construct,
     .destruct = netdev_dpdk_vhost_destruct,
     .send = netdev_dpdk_vhost_send,
-    .process_async = NULL,
+    .process_async = netdev_dpdk_vhost_async_tx_free,
     .get_carrier = netdev_dpdk_vhost_get_carrier,
     .get_stats = netdev_dpdk_vhost_get_stats,
     .get_custom_stats = netdev_dpdk_vhost_get_custom_stats,
@@ -5836,6 +6559,7 @@ static const struct netdev_class dpdk_vhost_class = {
     .reconfigure = netdev_dpdk_vhost_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
+    .rxq_drain = netdev_dpdk_vhost_rxq_drain,
 };
 
 static const struct netdev_class dpdk_vhost_client_class = {
@@ -5846,7 +6570,7 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .destruct = netdev_dpdk_vhost_destruct,
     .set_config = netdev_dpdk_vhost_client_set_config,
     .send = netdev_dpdk_vhost_send,
-    .process_async = NULL,
+    .process_async = netdev_dpdk_vhost_async_tx_free,
     .get_carrier = netdev_dpdk_vhost_get_carrier,
     .get_stats = netdev_dpdk_vhost_get_stats,
     .get_custom_stats = netdev_dpdk_vhost_get_custom_stats,
@@ -5854,6 +6578,7 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .reconfigure = netdev_dpdk_vhost_client_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
+    .rxq_drain = netdev_dpdk_vhost_rxq_drain,
 };
 
 void

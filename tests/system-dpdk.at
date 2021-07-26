@@ -1198,3 +1198,497 @@ OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
 ])")
 AT_CLEANUP
 dnl --------------------------------------------------------------------------
+
+
+
+dnl vhost async port tests.
+dnl This requires:
+dnl 1. dpdk-testpmd to be available in the current path.
+dnl 2. atleast 1 DMA channel to be bound to vfio-pci and enumerated using dpdk-devbind.py script.
+dnl 3. atleast 4 CPU cores on the platform.
+dnl 4. scapy to be available for traffic generation.
+
+dnl --------------------------------------------------------------------------
+dnl vhost async port addition.
+AT_SETUP([OVS-DPDK - vhost async port addition])
+dnl Enable async mode, add a port, send finite traffic and check the packet count.
+AT_KEYWORDS([dpdk])
+AT_SKIP_IF([! which dpdk-testpmd >/dev/null 2>/dev/null])
+AT_SKIP_IF([! $PYTHON3 -c "import scapy"], [], [])
+
+dnl Check if any DMA device is available and is bound to vfio-pci.
+AT_SKIP_IF([! $DPDK_DIR/usertools/dpdk-devbind.py --status-dev dma | head -n +4 | tail -1 | grep "drv=vfio-pci"], [], [stdout])
+
+dnl Find number of sockets
+AT_CHECK([lscpu], [], [stdout])
+AT_CHECK([cat stdout | grep "NUMA node(s)" | awk '{c=1; while (c++<$(3)) {printf "512,"}; print "512"}' > NUMA_NODE])
+
+OVS_DPDK_START_OVSDB()
+dnl Enable DPDK functionality
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-socket-mem="$(cat NUMA_NODE)"])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:pmd-cpu-mask=0x2])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:vhost-async-support=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-lcore-mask="0x1"])
+OVS_DPDK_START_VSWITCHD()
+
+AT_CHECK([grep "Async support enabled for vhost-user-client." ovs-vswitchd.log], [], [stdout])
+
+dnl Add userspace bridge and vhost port.
+AT_CHECK([ovs-vsctl add-br br10 -- set bridge br10 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br10 dpdkvhostuserclient0 -- set Interface dpdkvhostuserclient0 type=dpdkvhostuserclient options:vhost-server-path=$OVS_RUNDIR/dpdkvhostclient0 ofport_request=1], [], [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+sleep 2
+
+AT_CHECK([grep "DMA device .* with dev id: .* on NUMA: .* assigned to pmd .* on NUMA: .* for vhost async copy offload." ovs-vswitchd.log], [], [stdout])
+
+dnl Execute testpmd in background
+on_exit "pkill -f -x -9 'tail -f /dev/null'"
+tail -f /dev/null | dpdk-testpmd --socket-mem="$(cat NUMA_NODE)" --no-pci\
+           --vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1" \
+           --file-prefix page0 \
+           -- -a >$OVS_RUNDIR/testpmd-dpdkvhostuserclient0.log 2>&1 &
+
+OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
+sleep 1
+AT_CHECK([grep "Async channel register success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel register success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-ofctl add-flow br10 in_port=1,action=output:2])
+AT_CHECK([ovs-ofctl add-flow br10 in_port=2,action=output:1])
+
+AT_CHECK([$PYTHON3 $srcdir/mfex_fuzzy.py test_traffic.pcap 1000 simple_udp], [], [stdout])
+AT_CHECK([ovs-vsctl add-port br10 pcap_port -- set Interface pcap_port type=dpdk options:dpdk-devargs=net_pcap1,rx_pcap=test_traffic.pcap ofport_request=2], [], [stdout], [stderr])
+
+sleep 2
+
+AT_CHECK([ovs-appctl dpctl/show -s], [], [stdout])
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface pcap_port statistics | grep -oP 'tx_packets=\s*\K\d+'` -ge 500])
+AT_CHECK([ovs-vsctl get interface pcap_port statistics | grep -oP 'tx_packets=\s*\K\d+' > PACKETS])
+AT_CHECK([ovs-vsctl get interface dpdkvhostuserclient0 statistics| grep rx_packets=$(cat PACKETS)], [], [stdout])
+AT_CHECK([ovs-vsctl get interface dpdkvhostuserclient0 statistics| grep tx_packets=$(cat PACKETS)], [], [stdout])
+
+dnl Clean up the testpmd now
+pkill -f -x -9 'tail -f /dev/null'
+
+AT_CHECK([ovs-vsctl del-port br10 pcap_port])
+
+AT_CHECK([grep "Clearing async inflight packets for vid: 0, qid: 0, inflight: .*" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel unregister success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Clearing async inflight packets for vid: 0, qid: 1, inflight: .*" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel unregister success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-appctl dpif-netdev/pmd-perf-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show], [], [stdout], [stderr])
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br10 dpdkvhostuserclient0], [], [stdout], [stderr])
+OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) failed to connect: No such file or directory@d
+\@No available DMA device on same numa as PMD.*@d
+])")
+
+TOTAL_DMA_PACKETS=$(($(cat PACKETS)*2))
+AT_CHECK([grep "DMA device with dev id: .* stats: submitted: $TOTAL_DMA_PACKETS, completed: $TOTAL_DMA_PACKETS, errors: 0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "DMA device with dev id: .* used for vhost async copy offload released from pmd." ovs-vswitchd.log], [], [stdout])
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+
+dnl --------------------------------------------------------------------------
+dnl Ping vhost-user-client async port
+AT_SETUP([OVS-DPDK - ping vhost-user-client async port])
+dnl Enable async mode, add a port, do ping test.
+AT_KEYWORDS([dpdk])
+AT_SKIP_IF([! which dpdk-testpmd >/dev/null 2>/dev/null])
+OVS_DPDK_START_OVSDB()
+dnl Enable DPDK functionality
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:vhost-async-support=true])
+OVS_DPDK_START_VSWITCHD()
+
+dnl Find number of sockets
+AT_CHECK([lscpu], [], [stdout])
+AT_CHECK([cat stdout | grep "NUMA node(s)" | awk '{c=1; while (c++<$(3)) {printf "512,"}; print "512"}' > NUMA_NODE])
+
+dnl Add userspace bridge and attach it to OVS
+AT_CHECK([ovs-vsctl add-br br10 -- set bridge br10 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br10 dpdkvhostuserclient0 -- set Interface \
+          dpdkvhostuserclient0 \
+          type=dpdkvhostuserclient \
+          options:vhost-server-path=$OVS_RUNDIR/dpdkvhostclient0], [],
+         [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+
+AT_CHECK([grep "DMA device .* with dev id: .* on NUMA: .* assigned to pmd .* on NUMA: .* for vhost async copy offload." ovs-vswitchd.log], [], [stdout])
+
+dnl Parse log file
+AT_CHECK([grep "VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) vhost-user client: socket created" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "vHost User device 'dpdkvhostuserclient0' created in 'client' mode, using client socket" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) reconnecting..." ovs-vswitchd.log], [], [stdout])
+
+dnl Set up namespaces
+ADD_NAMESPACES(ns1, ns2)
+
+dnl Add veth device
+ADD_VETH(tap1, ns2, br10, "172.31.110.12/24")
+
+dnl Execute testpmd in background
+on_exit "pkill -f -x -9 'tail -f /dev/null'"
+tail -f /dev/null | dpdk-testpmd --socket-mem="$(cat NUMA_NODE)" --no-pci\
+           --vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1" \
+           --vdev="net_tap0,iface=tap0" --file-prefix page0 \
+           --single-file-segments -- -a >$OVS_RUNDIR/testpmd-dpdkvhostuserclient0.log 2>&1 &
+
+OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
+OVS_WAIT_UNTIL([ip link show dev tap0 | grep -qw LOWER_UP])
+sleep 1
+AT_CHECK([grep "Async channel register success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel register success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+dnl Move the tap devices to the namespaces
+AT_CHECK([ps aux | grep testpmd], [], [stdout], [stderr])
+AT_CHECK([ip link show], [], [stdout], [stderr])
+AT_CHECK([ip link set tap0 netns ns1], [], [stdout], [stderr])
+
+AT_CHECK([ip netns exec ns1 ip link show], [], [stdout], [stderr])
+AT_CHECK([ip netns exec ns1 ip link show | grep tap0], [], [stdout], [stderr])
+AT_CHECK([ip netns exec ns1 ip link set tap0 up], [], [stdout], [stderr])
+AT_CHECK([ip netns exec ns1 ip addr add 172.31.110.11/24 dev tap0], [],
+         [stdout], [stderr])
+
+AT_CHECK([ip netns exec ns1 ip link show], [], [stdout], [stderr])
+AT_CHECK([ip netns exec ns2 ip link show], [], [stdout], [stderr])
+AT_CHECK([ip netns exec ns1 ping -c 4 -I tap0 172.31.110.12], [], [stdout],
+         [stderr])
+
+AT_CHECK([ovs-appctl dpif-netdev/pmd-perf-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpctl/show -s], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl coverage/show | grep -E "vhost_async"], [], [stdout], [stderr])
+
+OVS_WAIT_UNTIL([test `ovs-appctl coverage/read-counter vhost_async_tx_enqueue| grep -oP '\s*\K\d+'` -ge 5])
+OVS_WAIT_UNTIL([test `ovs-appctl coverage/read-counter vhost_async_tx_poll| grep -oP '\s*\K\d+'` -ge 1])
+OVS_WAIT_UNTIL([test `ovs-appctl coverage/read-counter vhost_async_rx_enqueue| grep -oP '\s*\K\d+'` -ge 5])
+
+dnl Clean up the testpmd now
+pkill -f -x -9 'tail -f /dev/null'
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br10 dpdkvhostuserclient0], [], [stdout], [stderr])
+OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) recvmsg failed@d
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) failed to connect: No such file or directory@d
+\@No available DMA device on same numa as PMD.*@d
+])")
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+
+dnl --------------------------------------------------------------------------
+dnl vhost async abrupt close
+AT_SETUP([OVS-DPDK - vhost async abrupt close])
+dnl Enable async mode, add a port, send infinite traffic, abruptly close testpmd, check packet count.
+AT_KEYWORDS([dpdk])
+AT_SKIP_IF([! which dpdk-testpmd >/dev/null 2>/dev/null])
+AT_SKIP_IF([! $PYTHON3 -c "import scapy"], [], [])
+
+dnl Check if any DMA device is available and is bound to vfio-pci.
+AT_SKIP_IF([! $DPDK_DIR/usertools/dpdk-devbind.py --status-dev dma | head -n +4 | tail -1 | grep "drv=vfio-pci"], [], [stdout])
+
+dnl Find number of sockets
+AT_CHECK([lscpu], [], [stdout])
+AT_CHECK([cat stdout | grep "NUMA node(s)" | awk '{c=1; while (c++<$(3)) {printf "512,"}; print "512"}' > NUMA_NODE])
+
+OVS_DPDK_START_OVSDB()
+dnl Enable DPDK functionality
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-socket-mem="$(cat NUMA_NODE)"])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:pmd-cpu-mask=0x2])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:vhost-async-support=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-lcore-mask="0x1"])
+OVS_DPDK_START_VSWITCHD()
+
+AT_CHECK([grep "Async support enabled for vhost-user-client." ovs-vswitchd.log], [], [stdout])
+
+dnl Add userspace bridge and vhost port.
+AT_CHECK([ovs-vsctl add-br br10 -- set bridge br10 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br10 dpdkvhostuserclient0 -- set Interface dpdkvhostuserclient0 type=dpdkvhostuserclient options:vhost-server-path=$OVS_RUNDIR/dpdkvhostclient0 ofport_request=1], [], [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+sleep 2
+
+AT_CHECK([grep "DMA device .* with dev id: .* on NUMA: .* assigned to pmd .* on NUMA: .* for vhost async copy offload." ovs-vswitchd.log], [], [stdout])
+
+dnl Execute testpmd in background
+on_exit "pkill -f -x -9 'tail -f /dev/null'"
+tail -f /dev/null | dpdk-testpmd --socket-mem="$(cat NUMA_NODE)" --no-pci\
+           --vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1" \
+           --file-prefix page0 \
+           -- -a >$OVS_RUNDIR/testpmd-dpdkvhostuserclient0.log 2>&1 &
+
+OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
+sleep 1
+AT_CHECK([grep "Async channel register success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel register success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-ofctl add-flow br10 in_port=1,action=output:2])
+AT_CHECK([ovs-ofctl add-flow br10 in_port=2,action=output:1])
+
+AT_CHECK([$PYTHON3 $srcdir/mfex_fuzzy.py test_traffic.pcap 1000 simple_udp], [], [stdout])
+AT_CHECK([ovs-vsctl add-port br10 pcap_port -- set Interface pcap_port type=dpdk options:dpdk-devargs=net_pcap1,rx_pcap=test_traffic.pcap,infinite_rx=1 ofport_request=2], [], [stdout], [stderr])
+
+sleep 2
+
+AT_CHECK([ovs-appctl dpctl/show -s], [], [stdout])
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface pcap_port statistics | grep -oP 'tx_packets=\s*\K\d+'` -ge 10000])
+
+dnl abort the testpmd now i.e abrupt close
+pkill -f -x -9 'tail -f /dev/null'
+sleep 2
+
+OVS_WAIT_UNTIL([grep "Clearing async inflight packets for vid: 0, qid: 0, inflight: .*" ovs-vswitchd.log])
+AT_CHECK([grep "Async channel unregister success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+
+OVS_WAIT_UNTIL([grep "Clearing async inflight packets for vid: 0, qid: 1, inflight: .*" ovs-vswitchd.log])
+AT_CHECK([grep "Async channel unregister success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-vsctl del-port br10 pcap_port])
+sleep 5
+
+AT_CHECK([ovs-appctl dpctl/show -s], [], [stdout])
+
+AT_CHECK([ovs-appctl dpif-netdev/pmd-perf-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show], [], [stdout], [stderr])
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br10 dpdkvhostuserclient0], [], [stdout], [stderr])
+OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) failed to connect: No such file or directory@d
+\@No available DMA device on same numa as PMD.*@d
+])")
+
+AT_CHECK([grep "DMA device with dev id: .* stats: submitted: .*, completed: .*, errors: 0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "DMA device with dev id: .* used for vhost async copy offload released from pmd." ovs-vswitchd.log], [], [stdout])
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+
+
+
+dnl --------------------------------------------------------------------------
+dnl vhost async port drain
+AT_SETUP([OVS-DPDK - vhost async port drain])
+dnl Enable async mode, add a port, send infinite traffic, remove vhost port, check packets are drained.
+AT_KEYWORDS([dpdk])
+AT_SKIP_IF([! which dpdk-testpmd >/dev/null 2>/dev/null])
+AT_SKIP_IF([! $PYTHON3 -c "import scapy"], [], [])
+
+dnl Check if any DMA device is available and is bound to vfio-pci.
+AT_SKIP_IF([! $DPDK_DIR/usertools/dpdk-devbind.py --status-dev dma | head -n +4 | tail -1 | grep "drv=vfio-pci"], [], [stdout])
+
+dnl Find number of sockets
+AT_CHECK([lscpu], [], [stdout])
+AT_CHECK([cat stdout | grep "NUMA node(s)" | awk '{c=1; while (c++<$(3)) {printf "512,"}; print "512"}' > NUMA_NODE])
+
+OVS_DPDK_START_OVSDB()
+dnl Enable DPDK functionality
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-socket-mem="$(cat NUMA_NODE)"])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:pmd-cpu-mask=0x2])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:vhost-async-support=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-lcore-mask="0x1"])
+OVS_DPDK_START_VSWITCHD()
+
+AT_CHECK([grep "Async support enabled for vhost-user-client." ovs-vswitchd.log], [], [stdout])
+
+dnl Add userspace bridge and vhost port.
+AT_CHECK([ovs-vsctl add-br br10 -- set bridge br10 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br10 dpdkvhostuserclient0 -- set Interface dpdkvhostuserclient0 type=dpdkvhostuserclient options:vhost-server-path=$OVS_RUNDIR/dpdkvhostclient0 ofport_request=1], [], [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+sleep 2
+
+AT_CHECK([grep "DMA device .* with dev id: .* on NUMA: .* assigned to pmd .* on NUMA: .* for vhost async copy offload." ovs-vswitchd.log], [], [stdout])
+
+dnl Execute testpmd in background
+on_exit "pkill -f -x -9 'tail -f /dev/null'"
+tail -f /dev/null | dpdk-testpmd --socket-mem="$(cat NUMA_NODE)" --no-pci\
+           --vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1" \
+           --file-prefix page0 \
+           -- -a >$OVS_RUNDIR/testpmd-dpdkvhostuserclient0.log 2>&1 &
+
+OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
+sleep 1
+AT_CHECK([grep "Async channel register success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel register success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-ofctl add-flow br10 in_port=1,action=output:2])
+AT_CHECK([ovs-ofctl add-flow br10 in_port=2,action=output:1])
+
+AT_CHECK([$PYTHON3 $srcdir/mfex_fuzzy.py test_traffic.pcap 1000 simple_udp], [], [stdout])
+AT_CHECK([ovs-vsctl add-port br10 pcap_port -- set Interface pcap_port type=dpdk options:dpdk-devargs=net_pcap1,rx_pcap=test_traffic.pcap,infinite_rx=1 ofport_request=2], [], [stdout], [stderr])
+
+sleep 2
+
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface pcap_port statistics | grep -oP 'tx_packets=\s*\K\d+'` -ge 10000])
+AT_CHECK([ovs-appctl dpctl/show -s], [], [stdout])
+
+TMP=$(($(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])+1))
+AT_CHECK([ovs-vsctl del-port br10 dpdkvhostuserclient0], [], [stdout], [stderr])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "Draining Rx async inflight packets for vid: 0, qid: 1, inflight:.*"])
+AT_CHECK([test `tail -n +$TMP ovs-vswitchd.log | grep -oP 'Draining Rx async inflight packets for vid: 0, qid: 1, inflight:\s*\K\d+'` -ge 32])
+sleep 2
+
+dnl close testpmd
+pkill -f -x -9 'tail -f /dev/null'
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br10 pcap_port])
+
+AT_CHECK([ovs-appctl dpif-netdev/pmd-perf-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show], [], [stdout], [stderr])
+
+OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) failed to connect: No such file or directory@d
+\@No available DMA device on same numa as PMD.*@d
+])")
+
+AT_CHECK([grep "DMA device with dev id: .* stats: submitted: .*, completed: .*, errors: 0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "DMA device with dev id: .* used for vhost async copy offload released from pmd." ovs-vswitchd.log], [], [stdout])
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+
+dnl --------------------------------------------------------------------------
+dnl vhost async pmd-cpu-mask change
+AT_SETUP([OVS-DPDK - vhost async pmd-cpu-mask change])
+dnl Enable async mode, add a port, send infinite traffic, trigger pmd reload with pmd-cpu-mask change, check draining and DMA (re)assignment for that pmd.
+AT_KEYWORDS([dpdk])
+AT_SKIP_IF([! which dpdk-testpmd >/dev/null 2>/dev/null])
+AT_SKIP_IF([! $PYTHON3 -c "import scapy"], [], [])
+
+dnl Check if any DMA device is available and is bound to vfio-pci.
+AT_SKIP_IF([! $DPDK_DIR/usertools/dpdk-devbind.py --status-dev dma | head -n +4 | tail -1 | grep "drv=vfio-pci"], [], [stdout])
+
+dnl Find number of sockets
+AT_CHECK([lscpu], [], [stdout])
+AT_CHECK([cat stdout | grep "NUMA node(s)" | awk '{c=1; while (c++<$(3)) {printf "512,"}; print "512"}' > NUMA_NODE])
+
+OVS_DPDK_START_OVSDB()
+dnl Enable DPDK functionality
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-socket-mem="$(cat NUMA_NODE)"])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:pmd-cpu-mask=0x2])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:vhost-async-support=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-lcore-mask="0x1"])
+OVS_DPDK_START_VSWITCHD()
+
+AT_CHECK([grep "Async support enabled for vhost-user-client." ovs-vswitchd.log], [], [stdout])
+
+dnl Add userspace bridge and vhost port.
+AT_CHECK([ovs-vsctl add-br br10 -- set bridge br10 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br10 dpdkvhostuserclient0 -- set Interface dpdkvhostuserclient0 type=dpdkvhostuserclient options:vhost-server-path=$OVS_RUNDIR/dpdkvhostclient0 ofport_request=1], [], [stdout], [stderr])
+AT_CHECK([ovs-vsctl show], [], [stdout])
+sleep 2
+
+AT_CHECK([grep "DMA device .* with dev id: .* on NUMA: .* assigned to pmd .* on NUMA: .* for vhost async copy offload." ovs-vswitchd.log], [], [stdout])
+
+dnl Execute testpmd in background
+on_exit "pkill -f -x -9 'tail -f /dev/null'"
+tail -f /dev/null | dpdk-testpmd --socket-mem="$(cat NUMA_NODE)" --no-pci\
+           --vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1" \
+           --file-prefix page0 \
+           -- -a >$OVS_RUNDIR/testpmd-dpdkvhostuserclient0.log 2>&1 &
+
+OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
+sleep 1
+AT_CHECK([grep "Async channel register success for vid: 0, queue: txq0" ovs-vswitchd.log], [], [stdout])
+AT_CHECK([grep "Async channel register success for vid: 0, queue: rxq0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-ofctl add-flow br10 in_port=1,action=output:2])
+AT_CHECK([ovs-ofctl add-flow br10 in_port=2,action=output:1])
+
+AT_CHECK([$PYTHON3 $srcdir/mfex_fuzzy.py test_traffic.pcap 1000 simple_udp], [], [stdout])
+AT_CHECK([ovs-vsctl add-port br10 pcap_port -- set Interface pcap_port type=dpdk options:dpdk-devargs=net_pcap1,rx_pcap=test_traffic.pcap,infinite_rx=1 ofport_request=2], [], [stdout], [stderr])
+
+sleep 2
+
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface pcap_port statistics | grep -oP 'tx_packets=\s*\K\d+'` -ge 10000])
+AT_CHECK([ovs-appctl dpctl/show -s], [], [stdout])
+
+AT_CHECK([ovs-appctl dpif-netdev/pmd-perf-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show], [], [stdout], [stderr])
+
+
+TMP=$(($(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])+1))
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:pmd-cpu-mask=0x4])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "Draining Rx async inflight packets for vid: 0, qid: 1, inflight:.*"])
+AT_CHECK([test `tail -n +$TMP ovs-vswitchd.log | grep -oP 'Draining Rx async inflight packets for vid: 0, qid: 1, inflight:\s*\K\d+'` -ge 32])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "DMA device with dev id: .* stats: submitted: .*, completed: .*, errors: 0"])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "DMA device with dev id: .* used for vhost async copy offload released from pmd."])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "DMA device .* with dev id: .* on NUMA: .* assigned to pmd .* on NUMA: .* for vhost async copy offload."])
+sleep 2
+
+AT_CHECK([ovs-appctl dpif-netdev/pmd-perf-show], [], [stdout], [stderr])
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show], [], [stdout], [stderr])
+
+dnl close testpmd
+pkill -f -x -9 'tail -f /dev/null'
+
+TMP=$(($(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])+1))
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br10 pcap_port])
+AT_CHECK([ovs-vsctl del-port br10 dpdkvhostuserclient0])
+OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) failed to connect: No such file or directory@d
+\@No available DMA device on same numa as PMD.*@d
+])")
+
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "DMA device with dev id: .* stats: submitted: .*, completed: .*, errors: 0"])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "DMA device with dev id: .* used for vhost async copy offload released from pmd."])
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+dnl --------------------------------------------------------------------------
+dnl vhost async - threshold get/set
+AT_SETUP([OVS-DPDK - vhost async - threshold get/set])
+dnl Enable async mode, get threshold, set different valid and invalid threshold.
+AT_KEYWORDS([dpdk])
+
+OVS_DPDK_START_OVSDB()
+dnl Enable DPDK functionality
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:vhost-async-support=true])
+OVS_DPDK_START_VSWITCHD()
+
+AT_CHECK([grep "Async support enabled for vhost-user-client." ovs-vswitchd.log], [], [stdout])
+
+dnl check default threshold.
+AT_CHECK([ovs-appctl netdev-dpdk/get-vhost-async-thresh | grep "Current vhost async threshold is: 128"], [], [stdout])
+
+dnl set threshold to min : 0
+AT_CHECK([ovs-appctl netdev-dpdk/set-vhost-async-thresh 0], [], [stdout], [stderr])
+AT_CHECK([grep "vhost_async_threshold set to: 0" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-appctl netdev-dpdk/get-vhost-async-thresh | grep "Current vhost async threshold is: 0"], [], [stdout])
+
+dnl set threshold to max: 9728
+AT_CHECK([ovs-appctl netdev-dpdk/set-vhost-async-thresh 9728], [], [stdout], [stderr])
+AT_CHECK([grep "vhost_async_threshold set to: 9728" ovs-vswitchd.log], [], [stdout])
+
+AT_CHECK([ovs-appctl netdev-dpdk/get-vhost-async-thresh | grep "Current vhost async threshold is: 9728"], [], [stdout])
+
+dnl set threshold to -ve: -276
+AT_CHECK([ovs-appctl netdev-dpdk/set-vhost-async-thresh -276 | grep "\-276 is not a valid threshold.Threshold must be >= 0 and <= 9728"], [], [stdout])
+AT_CHECK([ovs-appctl netdev-dpdk/get-vhost-async-thresh | grep "Current vhost async threshold is: 9728"], [], [stdout])
+
+dnl set threshold to > max: 65535
+AT_CHECK([ovs-appctl netdev-dpdk/set-vhost-async-thresh 65535 | grep "65535 is not a valid threshold.Threshold must be >= 0 and <= 9728"], [], [stdout])
+AT_CHECK([ovs-appctl netdev-dpdk/get-vhost-async-thresh | grep "Current vhost async threshold is: 9728"], [], [stdout])
+
+dnl Clean up
+OVS_VSWITCHD_STOP("m4_join([], [SYSTEM_DPDK_ALLOWED_LOGS], [
+\@VHOST_CONFIG: ($OVS_RUNDIR/dpdkvhostclient0) failed to connect: No such file or directory@d
+\@No available DMA device on same numa as PMD.*@d
+])")
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
