@@ -68,6 +68,12 @@ dpdk_vhost_postcopy_enabled(void)
 }
 
 bool
+dpdk_vhost_async_enabled(void)
+{
+    return false;
+}
+
+bool
 dpdk_per_port_memory(void)
 {
     return false;

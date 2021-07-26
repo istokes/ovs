@@ -51,6 +51,8 @@ static char *vhost_sock_dir = NULL;   /* Location of vhost-user sockets */
 static bool vhost_iommu_enabled = false; /* Status of vHost IOMMU support */
 static bool vhost_postcopy_enabled = false; /* Status of vHost POSTCOPY
                                              * support. */
+static bool vhost_async_copy_enabled = false; /* Status of vhost async
+                                               * support. */
 static bool per_port_memory = false; /* Status of per port memory support */
 
 /* Indicates successful initialization of DPDK. */
@@ -399,6 +401,25 @@ dpdk_init__(const struct smap *ovs_other_config)
     VLOG_INFO("POSTCOPY support for vhost-user-client %s.",
               vhost_postcopy_enabled ? "enabled" : "disabled");
 
+    vhost_async_copy_enabled = smap_get_bool(ovs_other_config,
+                                             "vhost-async-support", false);
+    if (vhost_async_copy_enabled) {
+        if (vhost_postcopy_enabled) {
+            VLOG_WARN("Async-copy and post-copy are not compatible "
+                      "for vhost-user-client. Disabling POSTCOPY support.");
+            vhost_postcopy_enabled = false;
+        }
+
+        if (vhost_iommu_enabled) {
+            vhost_iommu_enabled = false;
+            VLOG_WARN("Async copy is not compatible with IOMMU support for"
+                      " vhost-user-client. IOMMU support disabled.");
+        }
+        VLOG_INFO("Async support enabled for vhost-user-client.");
+    } else {
+        VLOG_INFO("Async support disabled for vhost-user-client.");
+    }
+
     per_port_memory = smap_get_bool(ovs_other_config,
                                     "per-port-memory", false);
     VLOG_INFO("Per port memory for DPDK devices %s.",
@@ -577,6 +598,12 @@ dpdk_vhost_postcopy_enabled(void)
 }
 
 bool
+dpdk_vhost_async_enabled(void)
+{
+    return vhost_async_copy_enabled;
+}
+
+bool
 dpdk_per_port_memory(void)
 {
     return per_port_memory;
@@ -608,6 +635,9 @@ dpdk_attach_thread(unsigned cpu)
     }
 
     VLOG_INFO("PMD thread uses DPDK lcore %u.", rte_lcore_id());
+    if (dpdk_vhost_async_enabled()) {
+        dpdk_dmadev_assign();
+    }
     return true;
 }
 
@@ -617,6 +647,9 @@ dpdk_detach_thread(void)
     unsigned int lcore_id;
 
     lcore_id = rte_lcore_id();
+    if (dpdk_vhost_async_enabled()) {
+        dpdk_dmadev_free();
+    }
     rte_thread_unregister();
     VLOG_INFO("PMD thread released DPDK lcore %u.", lcore_id);
 }

@@ -30,6 +30,8 @@ struct netdev;
 
 void netdev_dpdk_register(void);
 void free_dpdk_buf(struct dp_packet *);
+void dpdk_dmadev_assign(void);
+void dpdk_dmadev_free(void);
 
 bool netdev_dpdk_flow_api_supported(struct netdev *);
 
@@ -158,6 +160,18 @@ static inline void
 free_dpdk_buf(struct dp_packet *buf OVS_UNUSED)
 {
     /* Nothing */
+}
+
+static inline void
+dpdk_dmadev_assign(void)
+{
+    /* Nothing. */
+}
+
+static inline void
+dpdk_dmadev_free(void)
+{
+    /* Nothing. */
 }
 
 #endif
