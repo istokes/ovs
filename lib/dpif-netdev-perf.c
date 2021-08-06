@@ -232,6 +232,7 @@ pmd_perf_format_overall_stats(struct ds *str, struct pmd_perf_stats *s,
     uint64_t busy_iter = tot_iter >= idle_iter ? tot_iter - idle_iter : 0;
     uint64_t sleep_iter = stats[PMD_SLEEP_ITER];
     uint64_t tot_sleep_cycles = stats[PMD_CYCLES_SLEEP];
+    uint64_t work_deferred = stats[PMD_STAT_WORK_DEFER];
 
     ds_put_format(str,
             "  Iterations:         %12"PRIu64"  (%.2f us/it)\n"
@@ -298,8 +299,24 @@ pmd_perf_format_overall_stats(struct ds *str, struct pmd_perf_stats *s,
             tx_packets, (tx_packets / duration) / 1000,
             tx_batches, 1.0 * tx_packets / tx_batches);
     } else {
+        ds_put_format(str, "  Tx packets:        %12d\n", 0);
+    }
+    if (work_deferred > 0) {
+        uint64_t work_compl_checks = stats[PMD_STAT_WORK_IN_PROG] +
+                                     stats[PMD_STAT_WORK_DONE];
+
         ds_put_format(str,
-            "  Tx packets:         %12d\n\n", 0);
+            "  Work deferred:                   %12"PRIu64"\n"
+            "  - Deferred work done:            %12"PRIu64"\n"
+            "  - Work completion checks:        %12"PRIu64
+                                                "  (%.2f checks/work item)\n"
+            "  - Ring full when deferring work: %12"PRIu64"\n"
+            "  - Deferred work dropped:         %12"PRIu64"\n",
+            work_deferred, stats[PMD_STAT_WORK_DONE], work_compl_checks,
+            1.0 * work_compl_checks / stats[PMD_STAT_WORK_DONE],
+            stats[PMD_STAT_WORK_R_FULL], stats[PMD_STAT_WORK_DROPPED]);
+    } else {
+        ds_put_format(str, "  Work deferred:     %12d\n\n", 0);
     }
 }
 

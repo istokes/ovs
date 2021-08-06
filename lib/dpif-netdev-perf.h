@@ -77,6 +77,15 @@ enum pmd_stat_type {
                              * recirculation. */
     PMD_STAT_SENT_PKTS,     /* Packets that have been sent. */
     PMD_STAT_SENT_BATCHES,  /* Number of batches sent. */
+    PMD_STAT_WORK_DEFER,    /* Number of times that work was deferred. */
+    PMD_STAT_WORK_IN_PROG,  /* Number of times that work was still in progress
+                               when checked by a thread. */
+    PMD_STAT_WORK_R_FULL,   /* Number of times work ring was full when
+                             * deferring work. */
+    PMD_STAT_WORK_DONE,     /* Number of times that deferred work was
+                             * completed. */
+    PMD_STAT_WORK_DROPPED,  /* Number of times that deferred work was dropped.
+                             */
     PMD_CYCLES_ITER_IDLE,   /* Cycles spent in idle iterations. */
     PMD_CYCLES_ITER_BUSY,   /* Cycles spent in busy iterations. */
     PMD_CYCLES_UPCALL,      /* Cycles spent processing upcalls. */
