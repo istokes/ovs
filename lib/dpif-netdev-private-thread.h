@@ -20,6 +20,7 @@
 
 #include "dpif.h"
 #include "dpif-netdev-perf.h"
+#include "dpif-netdev-private-defer.h"
 #include "dpif-netdev-private-dfc.h"
 #include "dpif-netdev-private-dpif.h"
 
@@ -226,6 +227,9 @@ struct dp_netdev_pmd_thread {
 
     /* Next time when PMD should try RCU quiescing. */
     long long next_rcu_quiesce;
+
+    /* Structure to track deferred work in this thread. */
+    struct dp_defer defer;
 };
 
 #ifdef  __cplusplus

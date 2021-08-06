@@ -892,7 +892,8 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
     }
 
     error = netdev->netdev_class->send(netdev, qid, batch, concurrent_txq);
-    if (!error) {
+    /* For async, treat netdev_send as called when -EINPROGRESS is returned. */
+    if (!error || error == -EINPROGRESS) {
         COVERAGE_INC(netdev_sent);
     }
     return error;

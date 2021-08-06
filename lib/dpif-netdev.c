@@ -279,6 +279,10 @@ struct dp_netdev {
     /* Enable the SMC cache from ovsdb config */
     atomic_bool smc_enable_db;
 
+    /* How many iterations of pmd_thread_main() to delay checking for the
+     * completion of deferred work. */
+    OVS_ALIGNED_VAR(CACHE_LINE_SIZE) atomic_uint8_t async_iteration_delay;
+
     /* Protects access to ofproto-dpif-upcall interface during revalidator
      * thread synchronization. */
     struct fat_rwlock upcall_rwlock;
@@ -503,6 +507,7 @@ struct tx_port {
     struct dp_packet_batch output_pkts;
     struct dp_packet_batch *txq_pkts; /* Only for hash mode. */
     struct dp_netdev_rxq *output_pkts_rxqs[NETDEV_MAX_BURST];
+    dp_defer_work_func cached_work_func;
 };
 
 /* Contained by struct tx_bond 'member_buckets'. */
@@ -1840,6 +1845,8 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
 
     atomic_init(&dp->emc_insert_min, DEFAULT_EM_FLOW_INSERT_MIN);
     atomic_init(&dp->tx_flush_interval, DEFAULT_TX_FLUSH_INTERVAL);
+
+    atomic_init(&dp->async_iteration_delay, DEFAULT_ASYNC_ITERATION_DELAY);
 
     cmap_init(&dp->poll_threads);
     dp->pmd_rxq_assign_type = SCHED_CYCLES;
@@ -4797,6 +4804,20 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
         dp_netdev_request_reconfigure(dp);
     }
 
+    int async_delay = smap_get_int(other_config, "async-iteration-delay",
+                                   DEFAULT_ASYNC_ITERATION_DELAY);
+    uint8_t cur_async_delay;
+    atomic_read_relaxed(&dp->async_iteration_delay, &cur_async_delay);
+    if (async_delay <= UINT8_MAX && async_delay >= 0) {
+        if (async_delay != cur_async_delay) {
+            atomic_store_relaxed(&dp->async_iteration_delay, async_delay);
+            VLOG_INFO("Asynchronous iteration delay changed to %d.",
+                      async_delay);
+        }
+    } else {
+        VLOG_ERR("Asynchronous delay value must be between 0 and 255.");
+    }
+
     atomic_read_relaxed(&dp->emc_insert_min, &cur_min);
     if (insert_prob <= UINT32_MAX) {
         insert_min = insert_prob == 0 ? 0 : UINT32_MAX / insert_prob;
@@ -5189,19 +5210,150 @@ pmd_perf_metrics_enabled(const struct dp_netdev_pmd_thread *pmd OVS_UNUSED)
 }
 #endif
 
+/* Check whether a sufficient number of iterations of pmd_thread_main() have
+ * occurred in order to attempt the next work item.  The number of iterations
+ * is equal to async_delay. */
+static inline bool
+iteration_reached(struct dp_defer *defer, uint64_t current_iteration_cnt,
+                  uint8_t async_delay)
+{
+    uint32_t read_idx = defer->read_idx & WORK_RING_MASK;
+    struct dp_defer_work_item *current_work = &defer->work_ring[read_idx];
+    uint64_t item_iteration_cnt = current_work->pmd_iteration_cnt;
+
+    /*return (current_iteration_cnt >= item_iteration_cnt);*/
+    return item_iteration_cnt <= (current_iteration_cnt - async_delay);
+}
+
+/* Try to do one piece of work from the work ring.
+ *
+ * Returns:
+ * -ENOENT: No work to do. The ring is empty.
+ * -EINPROGRESS: The work is still in progress, I can't do it.
+ * 0: One piece of work was taken from the ring. It was either successfully
+ *    handled, or dropped if attempted too many times.
+ */
+static inline unsigned int
+dp_defer_do_work(struct dp_defer *defer, struct pmd_perf_stats *perf_stats)
+{
+    struct dp_defer_work_item *work;
+    struct cycle_timer timer;
+    uint64_t cycles;
+    uint32_t read_idx;
+    int ret;
+    int i;
+
+    cycle_timer_start(perf_stats, &timer);
+    /* Check that there's a piece of work in the ring to do. */
+    if (dp_defer_work_ring_empty(defer)) {
+        /* Discard cycles. */
+        cycle_timer_stop(perf_stats, &timer);
+        return -ENOENT;
+    }
+
+    read_idx = defer->read_idx & WORK_RING_MASK;
+    work = &defer->work_ring[read_idx];
+    ret = work->work_func(work->netdev, work->qid, false);
+
+    if (ret == -EINPROGRESS) {
+        pmd_perf_update_counter(perf_stats, PMD_STAT_WORK_IN_PROG, 1);
+
+        work->attempts++;
+        if (work->attempts > ATTEMPT_LIMIT) {
+            ret = work->work_func(work->netdev, work->qid, true);
+            defer->read_idx++;
+
+            if (ret) {
+                pmd_perf_update_counter(perf_stats, PMD_STAT_WORK_DROPPED, 1);
+            } else {
+                pmd_perf_update_counter(perf_stats, PMD_STAT_WORK_DONE, 1);
+            }
+
+            ret = 0;
+            goto out;
+        }
+        goto out;
+    }
+
+    defer->read_idx++;
+    ret = 0;
+
+    pmd_perf_update_counter(perf_stats, PMD_STAT_WORK_DONE, 1);
+
+out:
+    /* Distribute send cycles evenly among transmitted packets and assign to
+     * their respective rx queues. */
+    cycles = cycle_timer_stop(perf_stats, &timer);
+
+    if (work->pkt_cnt) {
+        cycles = cycles / work->pkt_cnt;
+    }
+    for (i = 0; i < work->pkt_cnt; i++) {
+        dp_netdev_rxq_add_cycles(work->output_pkts_rxqs[i],
+                                 RXQ_CYCLES_PROC_CURR, cycles);
+    }
+
+    return ret;
+}
+
+static inline void
+dp_defer_work(struct dp_defer *defer, struct pmd_perf_stats *perf_stats,
+              struct dp_defer_work_item *work)
+{
+    struct dp_defer_work_item *ring_item;
+    uint32_t write_idx;
+
+    /* Check that we have enough room in ring. */
+    if (dp_defer_work_ring_full(defer)) {
+        /* The work ring is full, try to make room by doing work. Doing work
+         * can fail to make room if the work has to be requeued. Keep trying to
+         * do work until there is room in the ring. */
+        pmd_perf_update_counter(perf_stats, PMD_STAT_WORK_R_FULL, 1);
+
+        while (dp_defer_do_work(defer, perf_stats)) {
+            continue;
+        }
+    }
+
+    write_idx = defer->write_idx & WORK_RING_MASK;
+    ring_item = &defer->work_ring[write_idx];
+
+    ring_item->work_func = work->work_func;
+    ring_item->netdev = work->netdev;
+    ring_item->qid = work->qid;
+    ring_item->attempts = 0;
+    ring_item->pkt_cnt = work->pkt_cnt;
+    ring_item->output_pkts_rxqs = work->output_pkts_rxqs;
+    ring_item->pmd_iteration_cnt = work->pmd_iteration_cnt;
+
+    defer->write_idx++;
+
+    pmd_perf_update_counter(perf_stats, PMD_STAT_WORK_DEFER, 1);
+}
+
+static inline void
+dp_defer_do_all_work(struct dp_defer *defer, struct pmd_perf_stats *perf_stats)
+{
+    while (dp_defer_do_work(defer, perf_stats) != -ENOENT) {
+        continue;
+    }
+}
+
 static int
 dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
                                    struct tx_port *p)
 {
-    int i;
+    int i, ret = 0;
     int tx_qid;
     int output_cnt;
     bool concurrent_txqs;
     struct cycle_timer timer;
+    struct netdev *netdev;
     uint64_t cycles;
     uint32_t tx_flush_interval;
+    struct pmd_perf_stats *perf_stats = &pmd->perf_stats;
 
-    cycle_timer_start(&pmd->perf_stats, &timer);
+    cycle_timer_start(perf_stats, &timer);
 
     output_cnt = dp_packet_batch_size(&p->output_pkts);
     ovs_assert(output_cnt > 0);
@@ -5230,7 +5382,22 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
             if (dp_packet_batch_is_empty(&p->txq_pkts[i])) {
                 continue;
             }
-            netdev_send(p->port->netdev, i, &p->txq_pkts[i], true);
+            netdev = p->port->netdev;
+            ret = netdev_send(netdev, i, &p->txq_pkts[i], true);
+            if (ret == -EINPROGRESS) {
+                struct dp_defer_work_item work = {
+                    .work_func = p->cached_work_func,
+                    .netdev = netdev,
+                    .qid = i,
+                    .pkt_cnt = output_cnt,
+                    .output_pkts_rxqs = p->output_pkts_rxqs,
+                    .pmd_iteration_cnt = perf_stats->iteration_cnt,
+                };
+
+                /* Defer the work. */
+                dp_defer_work(&pmd->defer, perf_stats, &work);
+            }
+
             dp_packet_batch_init(&p->txq_pkts[i]);
         }
     } else {
@@ -5241,8 +5408,24 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
             tx_qid = pmd->static_tx_qid;
             concurrent_txqs = false;
         }
-        netdev_send(p->port->netdev, tx_qid, &p->output_pkts, concurrent_txqs);
+        netdev = p->port->netdev;
+        ret = netdev_send(netdev, tx_qid, &p->output_pkts, concurrent_txqs);
+
+        if (ret == -EINPROGRESS) {
+            struct dp_defer_work_item work = {
+                .work_func = p->cached_work_func,
+                .netdev = netdev,
+                .qid = tx_qid,
+                .pkt_cnt = output_cnt,
+                .output_pkts_rxqs = p->output_pkts_rxqs,
+                .pmd_iteration_cnt = perf_stats->iteration_cnt,
+            };
+
+            /* Defer the work. */
+            dp_defer_work(&pmd->defer, perf_stats, &work);
+        }
     }
+
     dp_packet_batch_init(&p->output_pkts);
 
     /* Update time of the next flush. */
@@ -5252,12 +5435,15 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
     ovs_assert(pmd->n_output_batches > 0);
     pmd->n_output_batches--;
 
-    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_SENT_PKTS, output_cnt);
-    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_SENT_BATCHES, 1);
+    /* The batch and number of packets are updated as sent here, even though
+     * some packets might have been dropped, or are in transit asynchronously.
+     */
+    pmd_perf_update_counter(perf_stats, PMD_STAT_SENT_PKTS, output_cnt);
+    pmd_perf_update_counter(perf_stats, PMD_STAT_SENT_BATCHES, 1);
 
     /* Distribute send cycles evenly among transmitted packets and assign to
      * their respective rx queues. */
-    cycles = cycle_timer_stop(&pmd->perf_stats, &timer) / output_cnt;
+    cycles = cycle_timer_stop(perf_stats, &timer) / output_cnt;
     for (i = 0; i < output_cnt; i++) {
         if (p->output_pkts_rxqs[i]) {
             dp_netdev_rxq_add_cycles(p->output_pkts_rxqs[i],
@@ -6918,6 +7104,7 @@ reload:
     ovs_mutex_lock(&pmd->perf_stats.stats_mutex);
     for (;;) {
         uint64_t rx_packets = 0, tx_packets = 0;
+        struct dp_defer *defer = &pmd->defer;
 
         pmd_perf_start_iteration(s);
 
@@ -6950,10 +7137,24 @@ reload:
             tx_packets = dp_netdev_pmd_flush_output_packets(pmd, false);
         }
 
+        uint8_t async_delay;
+        atomic_read_relaxed(&pmd->dp->async_iteration_delay, &async_delay);
+
+        /* Try to clear the work ring. If a piece of work is still in progress,
+         * don't attempt to do the remaining work items. They will be postponed
+         * to the next iteration of pmd_thread_main(). */
+        while (iteration_reached(defer, s->iteration_cnt, async_delay)
+               && !dp_defer_do_work(defer, s)) {
+            continue;
+        }
+
         /* Do RCU synchronization at fixed interval.  This ensures that
          * synchronization would not be delayed long even at high load of
          * packet processing. */
         if (pmd->ctx.now > pmd->next_rcu_quiesce) {
+            /* Do any work outstanding on this PMD thread. */
+            dp_defer_do_all_work(defer, s);
+
             if (!ovsrcu_try_quiesce()) {
                 pmd->next_rcu_quiesce =
                     pmd->ctx.now + PMD_RCU_QUIESCE_INTERVAL;
@@ -6962,6 +7163,8 @@ reload:
 
         if (lc++ > 1024) {
             lc = 0;
+            /* Do any work outstanding on this PMD thread. */
+            dp_defer_do_all_work(defer, s);
 
             coverage_try_clear();
             dp_netdev_pmd_try_optimize(pmd, poll_list, poll_cnt);
@@ -6984,6 +7187,8 @@ reload:
 
         atomic_read_explicit(&pmd->reload, &reload, memory_order_acquire);
         if (OVS_UNLIKELY(reload)) {
+            /* Do any work outstanding on this PMD thread. */
+            dp_defer_do_all_work(defer, s);
             break;
         }
 
@@ -7472,6 +7677,8 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     pmd_perf_stats_init(&pmd->perf_stats);
     cmap_insert(&dp->poll_threads, CONST_CAST(struct cmap_node *, &pmd->node),
                 hash_int(core_id, 0));
+
+    dp_defer_init(&pmd->defer);
 }
 
 static void
@@ -7646,6 +7853,7 @@ dp_netdev_add_port_tx_to_pmd(struct dp_netdev_pmd_thread *pmd,
     tx->qid = -1;
     tx->flush_time = 0LL;
     dp_packet_batch_init(&tx->output_pkts);
+    tx->cached_work_func = port->netdev->netdev_class->process_async;
 
     if (tx->port->txq_mode == TXQ_MODE_XPS_HASH) {
         int i, n_txq = netdev_n_txq(tx->port->netdev);

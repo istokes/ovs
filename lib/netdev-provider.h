@@ -384,7 +384,11 @@ struct netdev_class {
      * if it would always return EOPNOTSUPP anyhow.  (This will prevent the
      * network device from being usefully used by the netdev-based "userspace
      * datapath".  It will also prevent the OVS implementation of bonding from
-     * working properly over 'netdev'.) */
+     * working properly over 'netdev'.)
+     *
+     * May return EINPROGRESS. This indicates that the netdev has more work to
+     * do, and needs to have process_async called before sending buffers is
+     * totally completed. */
     int (*send)(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
                 bool concurrent_txq);
 
@@ -401,6 +405,19 @@ struct netdev_class {
      * May be null if not needed, such as for a network device that does not
      * implement packet transmission through the 'send' member function. */
     void (*send_wait)(struct netdev *netdev, int qid);
+
+    /* Performs asynchronous work required by the netdev to complete sending
+     * buffers. The work done in the process_async function is netdev specific,
+     * but could include freeing packets or updating port stats.
+     *
+     * If called with force = false, may return EINPROGRESS if the async call
+     * still hasn't completed, indicating process_async should be called on
+     * this netdev + qid again in the future.
+     *
+     * If called with force = true, can't return EINPROGRESS. Must handle stats
+     * updates and any freeing of buffers even if they haven't been sent yet.
+     */
+    int (*process_async)(struct netdev *netdev, int qid, bool force);
 
     /* Sets 'netdev''s Ethernet address to 'mac' */
     int (*set_etheraddr)(struct netdev *netdev, const struct eth_addr mac);
