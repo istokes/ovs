@@ -93,7 +93,7 @@ jobs:
             opts:         --enable-shared
 
           - compiler:     gcc
-            dpdk_shared:  dpdk-experimental
+            dpdk_shared:  dpdk_experimental
 
           - compiler:     gcc
             m32:          m32
