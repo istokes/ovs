@@ -16,6 +16,7 @@ jobs:
       DPDK:        ${{ matrix.dpdk }}
       DPDK_SHARED: ${{ matrix.dpdk_shared }}
       DPDK_VER:    refs/heads/main
+      DPDK_EXPERIMENTAL: ${{ matrix.dpdk_experimental }}
       KERNEL:      ${{ matrix.kernel }}
       LIBS:        ${{ matrix.libs }}
       M32:         ${{ matrix.m32 }}
@@ -92,6 +93,9 @@ jobs:
             opts:         --enable-shared
 
           - compiler:     gcc
+            dpdk_experimental: dpdk-experimental
+
+          - compiler:     gcc
             m32:          m32
             opts:         --disable-ssl
 
@@ -110,7 +114,7 @@ jobs:
         python-version: '3.9'
 
     - name: create ci signature file for the dpdk cache key
-      if:   matrix.dpdk != '' || matrix.dpdk_shared != ''
+      if:   matrix.dpdk != '' || matrix.dpdk_shared != '' || matrix.dpdk_experimental != ''
       # This will collect most of DPDK related lines, so hash will be different
       # if something changed in a way we're building DPDK including DPDK_VER.
       # This also allows us to use cache from any branch as long as version
@@ -120,10 +124,10 @@ jobs:
         cat dpdk-ci-signature
 
     - name: cache
-      if:   matrix.dpdk != '' || matrix.dpdk_shared != ''
+      if:   matrix.dpdk != '' || matrix.dpdk_shared != '' || matrix.dpdk_experimental != ''
       uses: actions/cache@v3
       env:
-        matrix_key: ${{ matrix.dpdk }}${{ matrix.dpdk_shared }}
+        matrix_key: ${{ matrix.dpdk }}${{ matrix.dpdk_shared }}${{ matrix.dpdk_experimental}}
         ci_key:     ${{ hashFiles('dpdk-ci-signature') }}
       with:
         path: dpdk-dir
