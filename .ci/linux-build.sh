@@ -160,6 +160,11 @@ function install_dpdk()
     # meson verbose outputs.
     DPDK_OPTS="$DPDK_OPTS -Ddeveloper_mode=disabled"
 
+    # OVS compilation and "normal" unit tests (run in the CI) do not depend on
+    # any DPDK driver being present.
+    # We can disable all drivers to save compilation time.
+    DPDK_OPTS="$DPDK_OPTS -Ddisable_drivers=*/*"
+
     # Install DPDK using prefix.
     DPDK_OPTS="$DPDK_OPTS --prefix=$(pwd)/build"
 
