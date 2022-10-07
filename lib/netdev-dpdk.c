@@ -160,7 +160,6 @@ typedef uint16_t dpdk_port_t;
 
 static const struct rte_eth_conf port_conf = {
     .rxmode = {
-        .split_hdr_size = 0,
         .offloads = 0,
     },
     .rx_adv_conf = {
