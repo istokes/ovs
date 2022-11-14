@@ -142,7 +142,7 @@ function install_dpdk()
         fi
         # No cache or version mismatch.
         rm -rf dpdk-dir
-        wget https://fast.dpdk.org/rel/dpdk-$1.tar.xz
+        wget https://git.dpdk.org/dpdk/snapshot/dpdk-$1.tar.xz
         tar xvf dpdk-$1.tar.xz > /dev/null
         DIR_NAME=$(tar -tf dpdk-$1.tar.xz | head -1 | cut -f1 -d"/")
         mv ${DIR_NAME} dpdk-dir
@@ -159,6 +159,11 @@ function install_dpdk()
     # Disable DPDK developer mode, this results in less build checks and less
     # meson verbose outputs.
     DPDK_OPTS="$DPDK_OPTS -Ddeveloper_mode=disabled"
+
+    # OVS compilation and "normal" unit tests (run in the CI) do not depend on
+    # any DPDK driver being present.
+    # We can disable all drivers to save compilation time.
+    DPDK_OPTS="$DPDK_OPTS -Ddisable_drivers=*/*"
 
     # Install DPDK using prefix.
     DPDK_OPTS="$DPDK_OPTS --prefix=$(pwd)/build"
@@ -228,7 +233,7 @@ fi
 
 if [ "$DPDK" ] || [ "$DPDK_SHARED" ]; then
     if [ -z "$DPDK_VER" ]; then
-        DPDK_VER="21.11.2"
+        DPDK_VER="22.11-rc4"
     fi
     install_dpdk $DPDK_VER
 fi
