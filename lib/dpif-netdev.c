@@ -5359,8 +5359,10 @@ out:
         cycles = cycles / work->pkt_cnt;
     }
     for (i = 0; i < work->pkt_cnt; i++) {
-        dp_netdev_rxq_add_cycles(work->output_pkts_rxqs[i],
-                                 RXQ_CYCLES_PROC_CURR, cycles);
+        if (work->output_pkts_rxqs[i]) {
+            dp_netdev_rxq_add_cycles(work->output_pkts_rxqs[i],
+                                     RXQ_CYCLES_PROC_CURR, cycles);
+        }
     }
 
     return ret;
